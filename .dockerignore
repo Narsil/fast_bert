@@ -1,0 +1,7 @@
+target
+docker/Dockerfile
+.dockerignore
+.git
+.gitignore
+tokenizer.json
+model.safetensors
