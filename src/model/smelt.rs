@@ -1,5 +1,5 @@
 use safetensors::tensor::{SafeTensors, TensorView};
-use smelt::ops::{add, gelu, matmul, matmul_t, mul, normalize, select, softmax, special_argmax};
+use smelt::ops::{add, gelu, matmul, matmul_t, mul, normalize, select, softmax};
 use smelt::tensor::{OwnedTensor, Tensor, TensorMut, ViewTensor};
 use tokenizers::Encoding;
 
@@ -124,6 +124,7 @@ impl<'a> Mlp<'a> {
     }
 
     fn forward(&self, tensor: &mut OwnedTensor) {
+        let input_tensor = tensor.clone();
         // println!("Intermediate {:?}", tensor.shape());
         // println!("Intermediate {:?}", self.intermediate.weight.shape());
         // println!("Intermediate {:?}", self.intermediate.bias.shape());
@@ -136,6 +137,7 @@ impl<'a> Mlp<'a> {
         self.output.forward(tensor);
         // println!("Output after {:?}", tensor.shape());
         // TODO SKIP connection
+        add(&input_tensor, tensor);
         self.output_ln.forward(tensor);
         // let tmp = tensor.data();
         // println!("After MLP {:?} {:?}", &tmp[..5], &tmp[tmp.len() - 5..]);
@@ -225,7 +227,10 @@ impl<'a> BertAttention<'a> {
     }
 
     pub fn forward(&self, hidden_states: &mut OwnedTensor) {
+        // println!("---");
+        //debug!("Attention", hidden_states);
         assert_eq!(hidden_states.shape().len(), 2);
+        let input_tensor = hidden_states.clone();
         let sequence_length = hidden_states.shape()[0];
         let hidden_dim = hidden_states.shape()[1];
 
@@ -247,8 +252,11 @@ impl<'a> BertAttention<'a> {
         let mut qv = OwnedTensor::zeros(vec![num_heads, sequence_length, head_dim]);
         let mut max = vec![0.0; (sequence_length) * num_heads];
         attention(&q, &k, &v, &mut qk, &mut max, &mut qv);
+
+        // debug!("After self attention", qv);
         // println!("qv {:?}", qv.shape());
         self.output.forward(&mut qv);
+        add(&input_tensor, &mut qv);
         // println!("ln {:?}", qv.shape());
         self.output_ln.forward(&mut qv);
         *hidden_states = qv;
@@ -284,15 +292,21 @@ impl<'a> BertLayer<'a> {
     }
 
     fn forward(&self, tensor: &mut OwnedTensor) {
-        let residual = tensor.clone();
+        // println!("==============");
+        // debug!("Incoming", tensor);
+
+        // let residual = tensor.clone();
         // self.ln_1.forward(tensor);
         self.attention.forward(tensor);
-        add(&residual, tensor);
-        let residual = tensor.clone();
+        // debug!("Attention", tensor);
+
+        // add(&residual, tensor);
+        // let residual = tensor.clone();
         // self.ln_2.forward(tensor);
 
         self.mlp.forward(tensor);
-        add(&residual, tensor);
+        // add(&residual, tensor);
+        // debug!("After layer", tensor);
     }
 }
 
@@ -423,11 +437,18 @@ impl<'a> BertPooler<'a> {
     }
 
     fn forward(&self, tensor: &mut OwnedTensor) {
-        self.pooler.forward(tensor);
+        debug!("Before pooler", tensor);
+        let mut first = OwnedTensor::zeros(vec![1, tensor.shape()[1]]);
+        select(&[0], tensor, &mut first);
+        self.pooler.forward(&mut first);
+        debug!("select", first);
         tensor
             .data_mut()
             .iter_mut()
             .for_each(|v| *v = f32::tanh(*v));
+        debug!("tanh", first);
+        *tensor = first;
+        debug!("tanh", tensor);
     }
 }
 
@@ -481,7 +502,7 @@ impl<'a> BertEmbeddings<'a> {
         add(&type_embeds, &mut tensor);
         add(&position_embeddings, &mut tensor);
         self.layer_norm.forward(&mut tensor);
-        debug!("After bert embeddings", tensor);
+        // debug!("After bert embeddings", tensor);
         tensor
     }
 }
@@ -492,6 +513,7 @@ pub struct Bert<'a> {
     encoder: BertEncoder<'a>,
     pooler: BertPooler<'a>,
     classifier: Linear<'a>,
+    num_classes: usize,
 }
 
 impl<'a> Bert<'a> {
@@ -503,17 +525,19 @@ impl<'a> Bert<'a> {
             tensors.tensor("classifier.weight").unwrap(),
             tensors.tensor("classifier.bias").unwrap(),
         );
+        let num_classes = classifier.weight.shape()[0];
         Self {
             encoder,
             pooler,
             embeddings,
             classifier,
+            num_classes,
         }
     }
 }
 
 impl<'a> Bert<'a> {
-    pub fn forward(&self, encoded: &Encoding) -> usize {
+    pub fn forward(&self, encoded: &Encoding) -> OwnedTensor {
         let mut tensor = self.embeddings.forward(encoded);
         // println!("tensor {:?}", tensor.shape());
         self.encoder.forward(&mut tensor);
@@ -521,471 +545,12 @@ impl<'a> Bert<'a> {
         self.pooler.forward(&mut tensor);
         // println!("tensor {:?}", tensor.shape());
         self.classifier.forward(&mut tensor);
-        // println!("tensor {:?}", tensor.shape());
-        let logits = tensor;
-        special_argmax(&logits)
+        debug!("outputs ", &tensor);
+        let mut logits = tensor;
+        let mut max = vec![0.0; self.num_classes];
+        // println!("logits {:?}", logits.shape());
+        softmax(&mut logits, &mut max);
+        debug!("logits ", logits);
+        logits
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::tests::simplify;
-//     use memmap2::MmapOptions;
-//     use smelt::tensor::{OwnedTensor, TensorMut, ViewTensor};
-//
-//     #[test]
-//     fn tensor_values() {
-//         let filename = "model.safetensors";
-//         let file = std::fs::File::open(filename).unwrap();
-//         let buffer = unsafe { MmapOptions::new().map(&file).unwrap() };
-//         let tensors = SafeTensors::deserialize(&buffer).unwrap();
-//         let tensor: ViewTensor = tensors.tensor("ln_f.weight").unwrap().into();
-//         let data = tensor.data();
-//         assert_eq!(
-//             simplify(&data[..10]),
-//             // Values obtained through python
-//             [1.3971, 1.3750, 1.8870, 1.1688, 1.2724, 1.2508, 9.4198, 1.4371, 1.4527, 1.1856]
-//         );
-//         assert_eq!(
-//             simplify(&data[data.len() - 10..]),
-//             // Values obtained through python
-//             [1.1758, 1.4514, 1.1525, 1.1731, 4.2194, 1.1660, 1.1625, 1.1034, 1.0980, 1.2070]
-//         );
-//     }
-//
-//     #[test]
-//     fn embedding() {
-//         let filename = "model.safetensors";
-//         let file = std::fs::File::open(filename).unwrap();
-//         let buffer = unsafe { MmapOptions::new().map(&file).unwrap() };
-//         let tensors = SafeTensors::deserialize(&buffer).unwrap();
-//         let tensor = tensors.tensor("wte.weight").unwrap();
-//         let embedding = Embedding::from(tensor);
-//         assert_eq!(
-//             simplify(&embedding.weight.data()[..10]),
-//             // Values obtained through python
-//             [
-//                 -0.1101, -0.0393, 0.0331, 0.1338, -0.0485, -0.0789, -0.2398, -0.0895, 0.0253,
-//                 -0.1074
-//             ]
-//         );
-//         let out = embedding.forward(&[1, 256, 50256]);
-//         let data = out.data();
-//         assert_eq!(out.shape(), [3, 768]);
-//         assert_eq!(
-//             simplify(&data[..10]),
-//             // Values obtained through python
-//             [0.0403, -0.0486, 0.0462, -0.0990, 0.0826, 0.0768, -0.2202, -0.0110, 0.0592, 0.0354]
-//         );
-//         assert_eq!(
-//             simplify(&data[data.len() - 10..]),
-//             // Values obtained through python
-//             [-0.0499, 0.0689, 0.0123, -0.2156, -0.1742, -0.0373, 0.0930, 0.0070, 0.1552, 0.1207]
-//         );
-//     }
-//
-//     #[test]
-//     fn layer_norm() {
-//         let filename = "model.safetensors";
-//         let file = std::fs::File::open(filename).unwrap();
-//         let buffer = unsafe { MmapOptions::new().map(&file).unwrap() };
-//         let tensors = SafeTensors::deserialize(&buffer).unwrap();
-//         let layer_norm = LayerNorm::from(
-//             tensors.tensor("ln_f.weight").unwrap(),
-//             tensors.tensor("ln_f.bias").unwrap(),
-//         );
-//         let data = layer_norm.weight.data();
-//         assert_eq!(
-//             simplify(&data[..10]),
-//             // Values obtained through python
-//             [1.3971, 1.3750, 1.8870, 1.1688, 1.2724, 1.2508, 9.4198, 1.4371, 1.4527, 1.1856]
-//         );
-//         assert_eq!(
-//             simplify(&data[data.len() - 10..]),
-//             // Values obtained through python
-//             [1.1758, 1.4514, 1.1525, 1.1731, 4.2194, 1.1660, 1.1625, 1.1034, 1.0980, 1.2070]
-//         );
-//
-//         let weight = ViewTensor::new(&[-1.0, 4.0], vec![2]);
-//         let bias = ViewTensor::new(&[1.0, 2.0], vec![2]);
-//         let epsilon = 1e-5;
-//         let layer_norm = LayerNorm {
-//             weight,
-//             bias,
-//             epsilon,
-//         };
-//
-//         let mut input = OwnedTensor::new(vec![10.0, 1.0, 1.0, 1.0], vec![2, 2]);
-//         layer_norm.forward(&mut input);
-//         assert_eq!(
-//             simplify(input.data()),
-//             // Values obtained through python
-//             [0.0, -2.0, 1.0, 2.0]
-//         );
-//     }
-//
-//     #[test]
-//     fn attention_data() {
-//         let filename = "model.safetensors";
-//         let file = std::fs::File::open(filename).unwrap();
-//         let buffer = unsafe { MmapOptions::new().map(&file).unwrap() };
-//         let tensors = SafeTensors::deserialize(&buffer).unwrap();
-//         let attention = BertAttention::from_tensors(0, &tensors, 12);
-//         let data = attention.c_attn.weight.data();
-//         assert_eq!(
-//             simplify(&data[..10]),
-//             // Values obtained through python
-//             [
-//                 -0.4738, -0.2614, -0.0978, -0.3499, 0.2243, -0.0429, 0.4187, 0.1744, -0.1883,
-//                 0.1836
-//             ]
-//         );
-//         assert_eq!(
-//             simplify(&data[data.len() - 10..]),
-//             // Values obtained through python
-//             [0.0015, -0.0719, 0.0741, 0.0541, 0.0540, 0.0205, 0.0176, -0.0046, 0.0070, 0.0198]
-//         );
-//     }
-//
-//     #[test]
-//     fn simple_attention() {
-//         // Values gotten from Python
-//         // ```python
-//         // import torch
-//         // from transformers.models.bert.modeling_bert import BertBertAttention, BertConfig
-//         // config = BertConfig(n_embd=8, n_head=2)
-//         // attn = BertBertAttention(config)
-//         // # remove dropout
-//         // attn.eval()
-//         // attn.c_attn.weight = torch.nn.Parameter(torch.arange(attn.c_attn.weight.nelement()).view(attn.c_attn.weight.shape).float())
-//         // attn.c_attn.bias = torch.nn.Parameter(torch.arange(attn.c_attn.bias.nelement()).view(attn.c_attn.bias.shape).float())
-//         // attn.c_proj.weight = torch.nn.Parameter(torch.arange(attn.c_proj.weight.nelement()).view(attn.c_proj.weight.shape).float())
-//         // attn.c_proj.bias = torch.nn.Parameter(torch.arange(attn.c_proj.bias.nelement()).view(attn.c_proj.bias.shape).float())
-//         // input = torch.ones((1, 3, 8))
-//         // attn_weights, (past_key, past_value) = attn(input, use_cache=True)
-//         // print(attn_weights.view(-1))
-//         // print(past_key.shape)
-//         // print(past_key.reshape(-1))
-//         // print(past_value.shape)
-//         // print(past_value.reshape(-1))
-//         //
-//         //
-//         // print()
-//         // print("Second pass")
-//         // new_input = torch.ones((1, 1, 8))
-//         // attn_weights2, (past_key, past_value) = attn(new_input, layer_past = (past_key, past_value), use_cache=True)
-//         // print(attn_weights2.view(-1))
-//         // print(past_key.shape)
-//         // print(past_key.view(-1))
-//         // print(past_value.shape)
-//         // print(past_value.view(-1))
-//         // ```
-//         let hidden_dim = 8;
-//         let num_heads = 2;
-//         let head_dim = hidden_dim / num_heads;
-//         let data_w = (0..hidden_dim * hidden_dim * 3)
-//             .map(|i| i as f32)
-//             .collect::<Vec<_>>();
-//         let weight = ViewTensor::new(&data_w, vec![hidden_dim, hidden_dim * 3]);
-//         let data_b = (0..hidden_dim * 3).map(|i| i as f32).collect::<Vec<_>>();
-//         let bias = ViewTensor::new(&data_b, vec![hidden_dim * 3]);
-//         let c_attn = Linear::new(weight, bias);
-//
-//         let data_w2 = (0..hidden_dim * hidden_dim)
-//             .map(|i| i as f32)
-//             .collect::<Vec<_>>();
-//         let weight = ViewTensor::new(&data_w2, vec![hidden_dim, hidden_dim]);
-//         let data_b2 = (0..hidden_dim).map(|i| i as f32).collect::<Vec<_>>();
-//         let bias = ViewTensor::new(&data_b2, vec![hidden_dim]);
-//         let c_proj = Linear::new(weight, bias);
-//
-//         let attention = BertAttention {
-//             c_attn,
-//             c_proj,
-//             num_heads,
-//         };
-//         let sequence_length = 3;
-//         let mut input = OwnedTensor::new(
-//             vec![1.0; hidden_dim * sequence_length],
-//             vec![sequence_length, hidden_dim],
-//         );
-//
-//         let key = OwnedTensor::zeros(vec![num_heads, 0, head_dim]);
-//         let value = OwnedTensor::zeros(vec![num_heads, 0, head_dim]);
-//         attention.forward(&mut input, &mut past);
-//         assert_eq!(
-//             input.data(),
-//             &[
-//                 192864., 199645., 206426., 213207., 219988., 226769., 233550., 240331., 192864.,
-//                 199645., 206426., 213207., 219988., 226769., 233550., 240331., 192864., 199645.,
-//                 206426., 213207., 219988., 226769., 233550., 240331.
-//             ]
-//         );
-//
-//         assert_eq!(past.key.shape(), vec![2, 3, 4]);
-//         assert_eq!(
-//             past.key.data(),
-//             [
-//                 744., 753., 762., 771., 744., 753., 762., 771., 744., 753., 762., 771., 780., 789.,
-//                 798., 807., 780., 789., 798., 807., 780., 789., 798., 807.
-//             ]
-//         );
-//         assert_eq!(past.value.shape(), vec![2, 3, 4]);
-//         assert_eq!(
-//             past.value.data(),
-//             [
-//                 816., 825., 834., 843., 816., 825., 834., 843., 816., 825., 834., 843., 852., 861.,
-//                 870., 879., 852., 861., 870., 879., 852., 861., 870., 879.
-//             ]
-//         );
-//
-//         // Second pass
-//         let sequence_length = 1;
-//         let mut input = OwnedTensor::new(vec![1.0; hidden_dim], vec![sequence_length, hidden_dim]);
-//         attention.forward(&mut input, &mut past);
-//         assert_eq!(
-//             input.data(),
-//             &[192864., 199645., 206426., 213207., 219988., 226769., 233550., 240331.]
-//         );
-//         assert_eq!(past.key.shape(), vec![2, 4, 4]);
-//         assert_eq!(
-//             past.key.data(),
-//             &[
-//                 744., 753., 762., 771., 744., 753., 762., 771., 744., 753., 762., 771., 744., 753.,
-//                 762., 771., 780., 789., 798., 807., 780., 789., 798., 807., 780., 789., 798., 807.,
-//                 780., 789., 798., 807.
-//             ]
-//         );
-//         assert_eq!(past.value.shape(), vec![2, 4, 4]);
-//         assert_eq!(
-//             past.value.data(),
-//             &[
-//                 816., 825., 834., 843., 816., 825., 834., 843., 816., 825., 834., 843., 816., 825.,
-//                 834., 843., 852., 861., 870., 879., 852., 861., 870., 879., 852., 861., 870., 879.,
-//                 852., 861., 870., 879.
-//             ]
-//         );
-//     }
-//
-//     #[test]
-//     fn mlp() {
-//         let hidden_dim = 8;
-//         let data = (0..hidden_dim * hidden_dim * 4)
-//             .map(|i| i as f32)
-//             .collect::<Vec<_>>();
-//         let weight = ViewTensor::new(&data, vec![hidden_dim, hidden_dim * 4]);
-//         let data = (0..hidden_dim * 4).map(|i| i as f32).collect::<Vec<_>>();
-//         let bias = ViewTensor::new(&data, vec![hidden_dim * 4]);
-//         let c_fc = Linear::new(weight, bias);
-//
-//         let data = (0..hidden_dim * hidden_dim * 4)
-//             .map(|i| i as f32)
-//             .collect::<Vec<_>>();
-//         let weight = ViewTensor::new(&data, vec![hidden_dim * 4, hidden_dim]);
-//         let data = (0..hidden_dim).map(|i| i as f32).collect::<Vec<_>>();
-//         let bias = ViewTensor::new(&data, vec![hidden_dim]);
-//         let c_proj = Linear::new(weight, bias);
-//
-//         let mlp = Mlp { c_fc, c_proj };
-//         let mut input = OwnedTensor::new(vec![1.0; hidden_dim], vec![1, hidden_dim]);
-//         mlp.forward(&mut input);
-//         assert_eq!(
-//             input.data(),
-//             // Values gotten from Python
-//             // ```python
-//             // import torch
-//             // from transformers.models.bert.modeling_bert import BertMLP, BertConfig
-//             // config = BertConfig(n_embd=8, n_head=2, activation_function="gelu_new")
-//             // mlp = BertMLP(config=config, intermediate_size = config.n_embd * 4)
-//             // # remove dropout
-//             // mlp.eval()
-//             // mlp.c_fc.weight = torch.nn.Parameter(torch.arange(mlp.c_fc.weight.nelement()).view(mlp.c_fc.weight.shape).float())
-//             // mlp.c_fc.bias = torch.nn.Parameter(torch.arange(mlp.c_fc.bias.nelement()).view(mlp.c_fc.bias.shape).float())
-//             // mlp.c_proj.weight = torch.nn.Parameter(torch.arange(mlp.c_proj.weight.nelement()).view(mlp.c_proj.weight.shape).float())
-//             // mlp.c_proj.bias = torch.nn.Parameter(torch.arange(mlp.c_proj.bias.nelement()).view(mlp.c_proj.bias.shape).float())
-//             // input = torch.ones((1, 1, 8))
-//             // print(mlp(input)[0].view(-1))
-//             // ```
-//             &[4305280., 4338417., 4371554., 4404691., 4437828., 4470965., 4504102., 4537239.]
-//         );
-//     }
-//
-//     #[test]
-//     fn simple_attention_qk() {
-//         // from transformers.models.bert.modeling_bert import BertBertAttention, BertConfig
-//         // import torch
-//         //
-//         // config = BertConfig(n_embd=8, n_head=2)
-//         // attn = BertBertAttention(config)
-//         // attn.c_attn.weight = torch.nn.Parameter(torch.arange(attn.c_attn.weight.nelement()).view(attn.c_attn.weight.shape).float())
-//         // attn.c_attn.bias = torch.nn.Parameter(torch.arange(attn.c_attn.bias.nelement()).view(attn.c_attn.bias.shape).float())
-//         //
-//         // hidden_states = torch.arange(24).view((1, 3, 8)).float() / 24
-//         // qkv = attn.c_attn(hidden_states)
-//         // print(qkv.view(-1))
-//         // query, key, value = qkv.split(attn.split_size, dim=2)
-//         //
-//         // query = attn._split_heads(query, attn.num_heads, attn.head_dim)
-//         // key = attn._split_heads(key, attn.num_heads, attn.head_dim)
-//         // value = attn._split_heads(value, attn.num_heads, attn.head_dim)
-//         //
-//         // print(query.reshape(-1))
-//         // print(key.reshape(-1))
-//         // key = key.transpose(-1, -2)
-//         // attn_weights = torch.matmul(query, key)
-//         // print(attn_weights.view(-1))
-//         let hidden_dim = 8;
-//         let num_heads = 2;
-//         let head_dim = hidden_dim / num_heads;
-//         let data = (0..hidden_dim * hidden_dim * 3)
-//             .map(|i| i as f32)
-//             .collect::<Vec<_>>();
-//         let weight = ViewTensor::new(&data, vec![hidden_dim, hidden_dim * 3]);
-//         let data = (0..hidden_dim * 3).map(|i| i as f32).collect::<Vec<_>>();
-//         let bias = ViewTensor::new(&data, vec![hidden_dim * 3]);
-//         let c_attn = Linear::new(weight, bias);
-//
-//         let sequence_length = 3;
-//         let data = (0..sequence_length * hidden_dim)
-//             .map(|i| i as f32)
-//             .collect::<Vec<_>>();
-//         let mut qkv = OwnedTensor::new(data, vec![sequence_length, hidden_dim]);
-//         c_attn.forward(&mut qkv);
-//         assert_eq!(
-//             qkv.data(),
-//             [
-//                 3360., 3389., 3418., 3447., 3476., 3505., 3534., 3563., 3592., 3621., 3650., 3679.,
-//                 3708., 3737., 3766., 3795., 3824., 3853., 3882., 3911., 3940., 3969., 3998., 4027.,
-//                 8736., 8829., 8922., 9015., 9108., 9201., 9294., 9387., 9480., 9573., 9666., 9759.,
-//                 9852., 9945., 10038., 10131., 10224., 10317., 10410., 10503., 10596., 10689.,
-//                 10782., 10875., 14112., 14269., 14426., 14583., 14740., 14897., 15054., 15211.,
-//                 15368., 15525., 15682., 15839., 15996., 16153., 16310., 16467., 16624., 16781.,
-//                 16938., 17095., 17252., 17409., 17566., 17723.
-//             ]
-//         );
-//         let mut qk = OwnedTensor::zeros(vec![num_heads, sequence_length, sequence_length]);
-//         let (query, key, _) = split_qkv(&qkv, &past);
-//         assert_eq!(
-//             query.data(),
-//             [
-//                 3360., 3389., 3418., 3447., 8736., 8829., 8922., 9015., 14112., 14269., 14426.,
-//                 14583., 3476., 3505., 3534., 3563., 9108., 9201., 9294., 9387., 14740., 14897.,
-//                 15054., 15211.
-//             ]
-//         );
-//         assert_eq!(
-//             key.data(),
-//             [
-//                 3592., 3621., 3650., 3679., 9480., 9573., 9666., 9759., 15368., 15525., 15682.,
-//                 15839., 3708., 3737., 3766., 3795., 9852., 9945., 10038., 10131., 15996., 16153.,
-//                 16310., 16467.
-//             ]
-//         );
-//         matmul_t(&query, &key, &mut qk);
-//         qk.data()
-//             .iter()
-//             .zip([
-//                 49497900.0,
-//                 130973350.0,
-//                 212448800.0,
-//                 129081000.0,
-//                 341554720.0,
-//                 554028500.0,
-//                 208664100.0,
-//                 552136100.0,
-//                 895608200.0,
-//                 52817820.0,
-//                 140673820.0,
-//                 228529820.0,
-//                 138781470.0,
-//                 369628860.0,
-//                 600476200.0,
-//                 224745120.0,
-//                 598583900.0,
-//                 972422660.0,
-//             ])
-//             .for_each(|(&l, r)| {
-//                 assert!((l - r).abs() / l < 1e-7);
-//             });
-//     }
-//
-//     #[test]
-//     fn simple_attention_ops() {
-//         // Values gotten from Python
-//         // ```python
-//         // from transformers.models.bert.modeling_bert import BertBertAttention, BertConfig
-//         // import torch
-//         //
-//         // config = BertConfig(n_embd=8, n_head=2)
-//         // attn = BertBertAttention(config)
-//         // attn.eval()
-//         // attn.c_attn.weight = torch.nn.Parameter(torch.arange(attn.c_attn.weight.nelement()).view(attn.c_attn.weight.shape).float())
-//         // attn.c_attn.bias = torch.nn.Parameter(torch.arange(attn.c_attn.bias.nelement()).view(attn.c_attn.bias.shape).float())
-//         //
-//         // hidden_states = torch.ones((1, 3, 8))
-//         // qkv = attn.c_attn(hidden_states)
-//         // query, key, value = qkv.split(attn.split_size, dim=2)
-//         //
-//         // query = attn._split_heads(query, attn.num_heads, attn.head_dim)
-//         // key = attn._split_heads(key, attn.num_heads, attn.head_dim)
-//         // value = attn._split_heads(value, attn.num_heads, attn.head_dim)
-//         // attn_output, _ = attn._attn(query, key, value)
-//         // attn_output = attn._merge_heads(attn_output, attn.num_heads, attn.head_dim)
-//         //
-//         // print(key.reshape(-1))
-//         // print(value.reshape(-1))
-//         // print(attn_output.view(-1))
-//         // ```
-//         let hidden_dim = 8;
-//         let num_heads = 2;
-//         let head_dim = hidden_dim / num_heads;
-//         let data = (0..hidden_dim * hidden_dim * 3)
-//             .map(|i| i as f32)
-//             .collect::<Vec<_>>();
-//         let weight = ViewTensor::new(&data, vec![hidden_dim, hidden_dim * 3]);
-//         let data = (0..hidden_dim * 3).map(|i| i as f32).collect::<Vec<_>>();
-//         let bias = ViewTensor::new(&data, vec![hidden_dim * 3]);
-//         let c_attn = Linear::new(weight, bias);
-//
-//         let sequence_length = 3;
-//         let mut qkv = OwnedTensor::new(
-//             vec![1.0; hidden_dim * sequence_length],
-//             vec![sequence_length, hidden_dim],
-//         );
-//         let key = OwnedTensor::zeros(vec![num_heads, 0, head_dim]);
-//         let value = OwnedTensor::zeros(vec![num_heads, 0, head_dim]);
-//         c_attn.forward(&mut qkv);
-//         let mut qk = OwnedTensor::zeros(vec![num_heads, sequence_length, sequence_length]);
-//
-//         let mut qv = OwnedTensor::zeros(vec![num_heads, sequence_length, head_dim]);
-//         let mut max = vec![0.0; sequence_length * num_heads];
-//         attention(&qkv, &mut qk, &mut max, &mut past, &mut qv);
-//         assert_eq!(past.key.shape(), vec![num_heads, sequence_length, head_dim]);
-//         assert_eq!(
-//             past.key.data(),
-//             [
-//                 744., 753., 762., 771., 744., 753., 762., 771., 744., 753., 762., 771., 780., 789.,
-//                 798., 807., 780., 789., 798., 807., 780., 789., 798., 807.
-//             ]
-//         );
-//         assert_eq!(
-//             past.value.shape(),
-//             vec![num_heads, sequence_length, head_dim]
-//         );
-//         assert_eq!(
-//             past.value.data(),
-//             [
-//                 816., 825., 834., 843., 816., 825., 834., 843., 816., 825., 834., 843., 852., 861.,
-//                 870., 879., 852., 861., 870., 879., 852., 861., 870., 879.
-//             ]
-//         );
-//         assert_eq!(
-//             qv.data(),
-//             [
-//                 816., 825., 834., 843., 852., 861., 870., 879., 816., 825., 834., 843., 852., 861.,
-//                 870., 879., 816., 825., 834., 843., 852., 861., 870., 879.
-//             ]
-//         );
-//     }
-// }

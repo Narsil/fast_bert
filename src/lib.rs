@@ -5,6 +5,7 @@ use crate::model::Bert;
 use memmap2::MmapOptions;
 use safetensors::tensor::{SafeTensorError, SafeTensors};
 use serde::Deserialize;
+use smelt::tensor::TensorMut;
 use std::fs::File;
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -81,13 +82,15 @@ pub async fn run() -> Result<(), BertError> {
 
     let bert = Bert::from_tensors(&tensors, config.num_attention_heads);
 
-    let string = "My name is";
+    let string = "My name";
 
     let encoded = tokenizer.encode(string, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
     println!("Loaded & encoded {:?}", start.elapsed());
     let inference_start = std::time::Instant::now();
-    let _new_id = bert.forward(&encoded);
+    let mut logits = bert.forward(&encoded);
+    let probs = logits;
+    println!("Probs {:?}", probs);
     println!("Inference in {:?}", inference_start.elapsed());
     println!("Total Inference {:?}", start.elapsed());
     Ok(())
@@ -115,9 +118,9 @@ mod tests {
         let filename = "tokenizer.json";
         let tokenizer = Tokenizer::from_file(filename).unwrap();
         let bert = Bert::from_tensors(&tensors, num_heads);
-        let string = "My name is";
+        let string = "My name";
         let encoded = tokenizer.encode(string, false).unwrap();
         let current_ids = encoded.get_ids().to_vec();
-        let _logits = bert.forward(&current_ids);
+        let logits = bert.forward(&current_ids);
     }
 }
