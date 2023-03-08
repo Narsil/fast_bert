@@ -3,17 +3,17 @@ use smelt::ops::{add, gelu, matmul, matmul_t, mul, normalize, select, softmax};
 use smelt::tensor::{OwnedTensor, Tensor, TensorMut, ViewTensor};
 use tokenizers::Encoding;
 
-macro_rules! debug {
-    ($string: expr, $tensor: expr) => {
-        let data = &$tensor.data();
-        println!(
-            "{:?} {:?} {:?}",
-            $string,
-            &data[..3],
-            &data[data.len() - 3..]
-        );
-    };
-}
+// macro_rules! debug {
+//     ($string: expr, $tensor: expr) => {
+//         let data = &$tensor.data();
+//         println!(
+//             "{:?} {:?} {:?}",
+//             $string,
+//             &data[..3],
+//             &data[data.len() - 3..]
+//         );
+//     };
+// }
 fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
     let sequence_length = q.shape()[0];
     let hidden_dim = q.shape()[1];
@@ -437,18 +437,16 @@ impl<'a> BertPooler<'a> {
     }
 
     fn forward(&self, tensor: &mut OwnedTensor) {
-        debug!("Before pooler", tensor);
+        // debug!("Before pooler", tensor);
         let mut first = OwnedTensor::zeros(vec![1, tensor.shape()[1]]);
         select(&[0], tensor, &mut first);
+        // debug!("select", first);
         self.pooler.forward(&mut first);
-        debug!("select", first);
-        tensor
-            .data_mut()
-            .iter_mut()
-            .for_each(|v| *v = f32::tanh(*v));
-        debug!("tanh", first);
+        // debug!("pooler", first);
+        first.data_mut().iter_mut().for_each(|v| *v = f32::tanh(*v));
+        // debug!("tanh", first);
         *tensor = first;
-        debug!("tanh", tensor);
+        // debug!("After", tensor);
     }
 }
 
@@ -497,8 +495,6 @@ impl<'a> BertEmbeddings<'a> {
         let positions: Vec<u32> = (0..ids.len()).map(|i| i as u32).collect();
         let position_embeddings = self.wpe.forward(&positions[..]);
 
-        println!("Ids {:?}", ids);
-
         add(&type_embeds, &mut tensor);
         add(&position_embeddings, &mut tensor);
         self.layer_norm.forward(&mut tensor);
@@ -541,16 +537,17 @@ impl<'a> Bert<'a> {
         let mut tensor = self.embeddings.forward(encoded);
         // println!("tensor {:?}", tensor.shape());
         self.encoder.forward(&mut tensor);
+        // debug!("After encoder ", tensor);
         // println!("tensor {:?}", tensor.shape());
         self.pooler.forward(&mut tensor);
         // println!("tensor {:?}", tensor.shape());
         self.classifier.forward(&mut tensor);
-        debug!("outputs ", &tensor);
+        // debug!("outputs ", &tensor);
         let mut logits = tensor;
         let mut max = vec![0.0; self.num_classes];
         // println!("logits {:?}", logits.shape());
         softmax(&mut logits, &mut max);
-        debug!("logits ", logits);
+        // debug!("logits ", logits);
         logits
     }
 }
