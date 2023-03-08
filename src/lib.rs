@@ -84,12 +84,11 @@ pub async fn run() -> Result<(), BertError> {
     let string = "My name is";
 
     let encoded = tokenizer.encode(string, false).unwrap();
+    let encoded = tokenizer.post_process(encoded, None, true).unwrap();
     println!("Loaded & encoded {:?}", start.elapsed());
-    let ids = encoded.get_ids().to_vec();
     let inference_start = std::time::Instant::now();
-    let _new_id = bert.forward(&ids);
+    let _new_id = bert.forward(&encoded);
     println!("Inference in {:?}", inference_start.elapsed());
-    println!("Result {:?}", tokenizer.decode(ids, false));
     println!("Total Inference {:?}", start.elapsed());
     Ok(())
 }

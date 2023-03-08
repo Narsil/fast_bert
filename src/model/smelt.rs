@@ -1,7 +1,19 @@
 use safetensors::tensor::{SafeTensors, TensorView};
 use smelt::ops::{add, gelu, matmul, matmul_t, mul, normalize, select, softmax, special_argmax};
 use smelt::tensor::{OwnedTensor, Tensor, TensorMut, ViewTensor};
+use tokenizers::Encoding;
 
+macro_rules! debug {
+    ($string: expr, $tensor: expr) => {
+        let data = &$tensor.data();
+        println!(
+            "{:?} {:?} {:?}",
+            $string,
+            &data[..3],
+            &data[data.len() - 3..]
+        );
+    };
+}
 fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
     let sequence_length = q.shape()[0];
     let hidden_dim = q.shape()[1];
@@ -19,7 +31,6 @@ fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
         });
     });
     let query = OwnedTensor::new(query_data, vec![num_heads, sequence_length, head_dim]);
-
     query
 }
 
@@ -421,16 +432,15 @@ impl<'a> BertPooler<'a> {
 }
 
 #[derive(Clone)]
-pub struct Bert<'a> {
+pub struct BertEmbeddings<'a> {
     wte: Embedding<'a>,
     wpe: Embedding<'a>,
-    encoder: BertEncoder<'a>,
-    pooler: BertPooler<'a>,
-    classifier: Linear<'a>,
+    type_embeddings: Embedding<'a>,
+    layer_norm: LayerNorm<'a>,
 }
 
-impl<'a> Bert<'a> {
-    pub fn from_tensors(tensors: &'a SafeTensors<'a>, num_heads: usize) -> Self {
+impl<'a> BertEmbeddings<'a> {
+    pub fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self {
         let wte = Embedding::from(
             tensors
                 .tensor("bert.embeddings.word_embeddings.weight")
@@ -441,6 +451,52 @@ impl<'a> Bert<'a> {
                 .tensor("bert.embeddings.position_embeddings.weight")
                 .unwrap(),
         );
+        let type_embeddings = Embedding::from(
+            tensors
+                .tensor("bert.embeddings.token_type_embeddings.weight")
+                .unwrap(),
+        );
+        let layer_norm = LayerNorm::from(
+            tensors.tensor("bert.embeddings.LayerNorm.weight").unwrap(),
+            tensors.tensor("bert.embeddings.LayerNorm.bias").unwrap(),
+        );
+        Self {
+            wte,
+            wpe,
+            type_embeddings,
+            layer_norm,
+        }
+    }
+}
+impl<'a> BertEmbeddings<'a> {
+    pub fn forward(&self, encoded: &Encoding) -> OwnedTensor {
+        let ids = encoded.get_ids();
+        let mut tensor = self.wte.forward(ids);
+        let type_embeds = self.type_embeddings.forward(encoded.get_type_ids());
+        let positions: Vec<u32> = (0..ids.len()).map(|i| i as u32).collect();
+        let position_embeddings = self.wpe.forward(&positions[..]);
+
+        println!("Ids {:?}", ids);
+
+        add(&type_embeds, &mut tensor);
+        add(&position_embeddings, &mut tensor);
+        self.layer_norm.forward(&mut tensor);
+        debug!("After bert embeddings", tensor);
+        tensor
+    }
+}
+
+#[derive(Clone)]
+pub struct Bert<'a> {
+    embeddings: BertEmbeddings<'a>,
+    encoder: BertEncoder<'a>,
+    pooler: BertPooler<'a>,
+    classifier: Linear<'a>,
+}
+
+impl<'a> Bert<'a> {
+    pub fn from_tensors(tensors: &'a SafeTensors<'a>, num_heads: usize) -> Self {
+        let embeddings = BertEmbeddings::from_tensors(tensors);
         let encoder = BertEncoder::from_tensors(tensors, num_heads);
         let pooler = BertPooler::from_tensors(tensors);
         let classifier = Linear::from(
@@ -450,21 +506,15 @@ impl<'a> Bert<'a> {
         Self {
             encoder,
             pooler,
-            wte,
-            wpe,
+            embeddings,
             classifier,
         }
     }
 }
 
 impl<'a> Bert<'a> {
-    pub fn forward(&self, ids: &[u32]) -> usize {
-        // println!("====");
-        let mut tensor = self.wte.forward(ids);
-        // println!("tensor {:?}", tensor.shape());
-        let positions: Vec<u32> = (0..ids.len()).map(|i| i as u32).collect();
-        let position_embeddings = self.wpe.forward(&positions[..]);
-        add(&position_embeddings, &mut tensor);
+    pub fn forward(&self, encoded: &Encoding) -> usize {
+        let mut tensor = self.embeddings.forward(encoded);
         // println!("tensor {:?}", tensor.shape());
         self.encoder.forward(&mut tensor);
         // println!("tensor {:?}", tensor.shape());
