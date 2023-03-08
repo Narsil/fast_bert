@@ -29,15 +29,20 @@ pub enum BertError {
     AcquireError(#[from] tokio::sync::AcquireError),
     #[error("No content length")]
     NoContentLength,
-    #[cfg(feature = "cuda")]
-    #[error("Driver error")]
-    ProfilerError(#[from] cudarc::driver::DriverError),
+    #[error("JSON parsing error")]
+    JSONError(#[from] serde_json::Error),
 }
 
-#[derive(Deserialize)]
-struct Config {
+#[derive(Clone, Deserialize)]
+pub struct Config {
     num_attention_heads: usize,
     id2label: HashMap<String, String>,
+}
+
+impl Config {
+    pub fn id2label(&self) -> &HashMap<String, String> {
+        &self.id2label
+    }
 }
 
 pub async fn run() -> Result<(), BertError> {

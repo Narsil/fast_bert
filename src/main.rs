@@ -4,10 +4,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use fast_bert::{download::download, model::Bert, BertError};
+use fast_bert::{download::download, model::Bert, BertError, Config};
 use memmap2::{Mmap, MmapOptions};
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
+use smelt::tensor::Tensor;
 use std::fs::File;
 use std::net::SocketAddr;
 use tokenizers::Tokenizer;
@@ -16,10 +17,8 @@ use tracing::{instrument, Level};
 
 #[derive(Clone)]
 struct AppState {
-    #[cfg(feature = "dfdx")]
-    model: Bert,
-    #[cfg(not(feature = "dfdx"))]
     model: Bert<'static>,
+    config: Config,
     tokenizer: Tokenizer,
 }
 
@@ -29,13 +28,13 @@ fn leak_buffer(buffer: Mmap) -> &'static [u8] {
 }
 
 #[instrument]
-async fn get_model(filename: &str) -> Result<Bert, BertError> {
+async fn get_model(model_id: &str, filename: &str) -> Result<Bert<'static>, BertError> {
     let max_files = 100;
     let chunk_size = 10_000_000;
     if !std::path::Path::new(filename).exists() {
-        let url = "https://huggingface.co/bert/resolve/main/model.safetensors";
+        let url = format!("https://huggingface.co/{model_id}/resolve/main/model.safetensors");
         println!("Downloading {url:?} into {filename:?}");
-        download(url, filename, max_files, chunk_size).await?;
+        download(&url, filename, max_files, chunk_size).await?;
     }
     let file = File::open(filename)?;
     let buffer = unsafe { MmapOptions::new().map(&file)? };
@@ -47,13 +46,27 @@ async fn get_model(filename: &str) -> Result<Bert, BertError> {
 }
 
 #[instrument]
-async fn get_tokenizer(filename: &str) -> Result<Tokenizer, BertError> {
+async fn get_config(model_id: &str, filename: &str) -> Result<Config, BertError> {
     let max_files = 100;
     let chunk_size = 10_000_000;
     if !std::path::Path::new(filename).exists() {
-        let url = "https://huggingface.co/bert/resolve/main/tokenizer.json";
+        let url = format!("https://huggingface.co/{model_id}/resolve/main/config.json");
         println!("Downloading {url:?} into {filename:?}");
-        download(url, filename, max_files, chunk_size).await?;
+        download(&url, filename, max_files, chunk_size).await?;
+    }
+    let config_str: String = std::fs::read_to_string(filename).expect("Could not read config");
+    let config: Config = serde_json::from_str(&config_str)?;
+    Ok(config)
+}
+
+#[instrument]
+async fn get_tokenizer(model_id: &str, filename: &str) -> Result<Tokenizer, BertError> {
+    let max_files = 100;
+    let chunk_size = 10_000_000;
+    if !std::path::Path::new(filename).exists() {
+        let url = format!("https://huggingface.co/{model_id}/resolve/main/tokenizer.json");
+        println!("Downloading {url:?} into {filename:?}");
+        download(&url, filename, max_files, chunk_size).await?;
     }
     Ok(Tokenizer::from_file(filename).unwrap())
 }
@@ -65,10 +78,16 @@ async fn main() -> Result<(), BertError> {
         std::env::set_var("RUST_LOG", "fast_bert=debug,tower_http=debug")
     }
     tracing_subscriber::fmt::init();
-    let model = get_model("model.safetensors").await?;
-    let tokenizer = get_tokenizer("tokenizer.json").await?;
+    let model_id: String = std::env::var("MODEL_ID").unwrap().into();
+    let model = get_model(&model_id, "model.safetensors").await?;
+    let tokenizer = get_tokenizer(&model_id, "tokenizer.json").await?;
+    let config = get_config(&model_id, "config.json").await?;
 
-    let state = AppState { model, tokenizer };
+    let state = AppState {
+        model,
+        tokenizer,
+        config,
+    };
     // build our application with a route
     let app = Router::new()
         // `GET /` goes to `root`
@@ -105,8 +124,9 @@ struct Inputs {
 
 // the output to our `create_user` handler
 #[derive(Serialize)]
-struct Outputs {
-    generated_text: String,
+struct Output {
+    label: String,
+    score: f32,
 }
 
 async fn health() -> impl IntoResponse {
@@ -121,9 +141,24 @@ async fn inference((State(state), payload): (State<AppState>, String)) -> impl I
     };
     let tokenizer = state.tokenizer;
     let encoded = tokenizer.encode(payload.inputs, false).unwrap();
-    let ids = encoded.get_ids().to_vec();
-    let new_id = state.model.forward(&ids);
-    let generated_text = tokenizer.decode(ids, false).unwrap();
-    let output = Outputs { generated_text };
+    let encoded = tokenizer.post_process(encoded, None, true).unwrap();
+    let probs = state.model.forward(&encoded);
+    let mut max_p = 0;
+    let mut max = 0.0;
+    for (i, &p) in probs.data().iter().enumerate() {
+        if p > max {
+            max = p;
+            max_p = i;
+        }
+    }
+    let output = Output {
+        label: state
+            .config
+            .id2label()
+            .get(&format!("{}", max_p))
+            .unwrap()
+            .to_string(),
+        score: max,
+    };
     Json(vec![output])
 }
