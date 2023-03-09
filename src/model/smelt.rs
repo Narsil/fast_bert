@@ -30,7 +30,7 @@ fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
             });
         });
     });
-    let query = OwnedTensor::new(query_data, vec![num_heads, sequence_length, head_dim]);
+    let query = OwnedTensor::new(query_data, vec![num_heads, sequence_length, head_dim]).unwrap();
     query
 }
 
@@ -56,13 +56,13 @@ fn attention<T: Tensor, TM: TensorMut>(
     let key = split_heads(key, num_heads);
     let value = split_heads(value, num_heads);
 
-    matmul_t(&query, &key, qk);
+    matmul_t(&query, &key, qk).unwrap();
     let head_dim = hidden_dim / num_heads;
     let scale = (head_dim as f32).sqrt();
     qk.data_mut().iter_mut().for_each(|v| *v /= scale);
 
-    softmax(qk, max);
-    matmul(qk, &value, out);
+    softmax(qk, max).unwrap();
+    matmul(qk, &value, out).unwrap();
 
     let mut new_out = vec![0.0; sequence_length * hidden_dim];
     (0..num_heads).for_each(|i| {
@@ -74,7 +74,7 @@ fn attention<T: Tensor, TM: TensorMut>(
             });
         });
     });
-    *out = OwnedTensor::new(new_out, vec![sequence_length, hidden_dim]);
+    *out = OwnedTensor::new(new_out, vec![sequence_length, hidden_dim]).unwrap();
 }
 
 #[derive(Clone)]
@@ -356,15 +356,12 @@ impl<'a> Linear<'a> {
     }
 
     pub fn forward(&self, tensor: &mut OwnedTensor) {
-        // println!("Tensor {:?}", tensor.shape());
-        // println!("Tensor {:?}", self.weight.shape());
-        // println!("Tensor {:?}", self.bias.shape());
         assert_eq!(tensor.shape().len(), 2);
         let m = tensor.shape()[0];
         let n = self.weight.shape()[0];
-        let mut c = OwnedTensor::new(vec![0.0; n * m], vec![m, n]);
+        let mut c = OwnedTensor::zeros(vec![m, n]);
 
-        matmul_t(tensor, &self.weight, &mut c);
+        matmul_t(tensor, &self.weight, &mut c).unwrap();
         add(&self.bias, &mut c);
         //addmm(tensor, &self.weight, &self.bias, &mut c);
         *tensor = c;
@@ -386,9 +383,8 @@ impl<'a> Embedding<'a> {
         let _vocab_size = self.weight.shape()[0];
         let hidden_dim = self.weight.shape()[1];
         let shape = vec![ids.len(), hidden_dim];
-        let data = vec![0.0; ids.len() * hidden_dim];
-        let mut tensor = OwnedTensor::new(data, shape);
-        select(ids, &self.weight, &mut tensor);
+        let mut tensor = OwnedTensor::zeros(shape);
+        select(ids, &self.weight, &mut tensor).unwrap();
         tensor
     }
 }
@@ -416,7 +412,7 @@ impl<'a> LayerNorm<'a> {
         let m = tensor.shape()[0];
         let mut mean = vec![0.0; m];
         let mut var = vec![0.0; m];
-        normalize(tensor, &mut mean, &mut var, self.epsilon);
+        normalize(tensor, &mut mean, &mut var, self.epsilon).unwrap();
         mul(&self.weight, tensor);
         add(&self.bias, tensor);
     }
@@ -439,7 +435,7 @@ impl<'a> BertPooler<'a> {
     fn forward(&self, tensor: &mut OwnedTensor) {
         // debug!("Before pooler", tensor);
         let mut first = OwnedTensor::zeros(vec![1, tensor.shape()[1]]);
-        select(&[0], tensor, &mut first);
+        select(&[0], tensor, &mut first).unwrap();
         // debug!("select", first);
         self.pooler.forward(&mut first);
         // debug!("pooler", first);
@@ -546,7 +542,7 @@ impl<'a> Bert<'a> {
         let mut logits = tensor;
         let mut max = vec![0.0; self.num_classes];
         // println!("logits {:?}", logits.shape());
-        softmax(&mut logits, &mut max);
+        softmax(&mut logits, &mut max).unwrap();
         // debug!("logits ", logits);
         logits
     }

@@ -113,13 +113,6 @@ pub async fn run() -> Result<(), BertError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smelt::ops::special_argmax;
-
-    pub(crate) fn simplify(data: &[f32]) -> Vec<f32> {
-        let precision = 3;
-        let m = 10.0 * 10.0f32.powf(precision as f32);
-        data.iter().map(|x| (x * m).round() / m).collect()
-    }
 
     #[test]
     fn simple_logits() {
@@ -134,7 +127,6 @@ mod tests {
         let bert = Bert::from_tensors(&tensors, num_heads);
         let string = "My name is";
         let encoded = tokenizer.encode(string, false).unwrap();
-        let current_ids = encoded.get_ids().to_vec();
-        let logits = bert.forward(&current_ids);
+        let _logits = bert.forward(&encoded);
     }
 }
