@@ -14,12 +14,29 @@ pub async fn download(
 ) -> Result<(), BertError> {
     let client = reqwest::Client::new();
     let response = client.head(url).send().await?;
-    let length = response
+    let response = client
+        .get(&url)
+        .header(RANGE, "bytes=0-0".to_string())
+        .send()
+        .await
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+    let content_range = response
         .headers()
-        .get(CONTENT_LENGTH)
-        .ok_or(BertError::NoContentLength)?
-        .to_str()?;
-    let length: usize = length.parse()?;
+        .get(CONTENT_RANGE)
+        .ok_or(PyException::new_err("No content length"))?
+        .to_str()
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+
+    let size: Vec<&str> = content_range.split('/').collect();
+    // Content-Range: bytes 0-0/702517648
+    // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
+    let length: usize = size
+        .last()
+        .ok_or(PyException::new_err(
+            "Error while downloading: No size was detected",
+        ))?
+        .parse()
+        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
