@@ -137,7 +137,7 @@ impl<'a> Mlp<'a> {
         self.output.forward(tensor);
         // println!("Output after {:?}", tensor.shape());
         // TODO SKIP connection
-        add(&input_tensor, tensor);
+        add(&input_tensor, tensor).unwrap();
         self.output_ln.forward(tensor);
         // let tmp = tensor.data();
         // println!("After MLP {:?} {:?}", &tmp[..5], &tmp[tmp.len() - 5..]);
@@ -256,7 +256,7 @@ impl<'a> BertAttention<'a> {
         // debug!("After self attention", qv);
         // println!("qv {:?}", qv.shape());
         self.output.forward(&mut qv);
-        add(&input_tensor, &mut qv);
+        add(&input_tensor, &mut qv).unwrap();
         // println!("ln {:?}", qv.shape());
         self.output_ln.forward(&mut qv);
         *hidden_states = qv;
@@ -362,7 +362,7 @@ impl<'a> Linear<'a> {
         let mut c = OwnedTensor::zeros(vec![m, n]);
 
         matmul_t(tensor, &self.weight, &mut c).unwrap();
-        add(&self.bias, &mut c);
+        add(&self.bias, &mut c).unwrap();
         //addmm(tensor, &self.weight, &self.bias, &mut c);
         *tensor = c;
     }
@@ -413,8 +413,8 @@ impl<'a> LayerNorm<'a> {
         let mut mean = vec![0.0; m];
         let mut var = vec![0.0; m];
         normalize(tensor, &mut mean, &mut var, self.epsilon).unwrap();
-        mul(&self.weight, tensor);
-        add(&self.bias, tensor);
+        mul(&self.weight, tensor).unwrap();
+        add(&self.bias, tensor).unwrap();
     }
 }
 
@@ -491,8 +491,8 @@ impl<'a> BertEmbeddings<'a> {
         let positions: Vec<u32> = (0..ids.len()).map(|i| i as u32).collect();
         let position_embeddings = self.wpe.forward(&positions[..]);
 
-        add(&type_embeds, &mut tensor);
-        add(&position_embeddings, &mut tensor);
+        add(&type_embeds, &mut tensor).unwrap();
+        add(&position_embeddings, &mut tensor).unwrap();
         self.layer_norm.forward(&mut tensor);
         // debug!("After bert embeddings", tensor);
         tensor

@@ -1279,7 +1279,7 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 [[package]]
 name = "smelt"
 version = "0.1.0"
-source = "git+https://github.com/Narsil/smelt#53db6cbea8098e17605bb54a81c5c6d02ec0d06f"
+source = "git+https://github.com/Narsil/smelt#1616befef706ac680010469fffb3af587a52adc8"
 dependencies = [
  "cblas-sys",
  "libc",
