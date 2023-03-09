@@ -96,16 +96,13 @@ pub async fn run() -> Result<(), BertError> {
     println!("Loaded & encoded {:?}", start.elapsed());
     let inference_start = std::time::Instant::now();
     let probs = bert.forward(&encoded);
-    let mut max_p = 0;
-    let mut max = 0.0;
-    for (i, &p) in probs.data().iter().enumerate() {
-        if p > max {
-            max = p;
-            max_p = i;
-        }
-    }
-    let output = [(config.id2label.get(&format!("{}", max_p)).unwrap(), max)];
-    println!("Probs {:?}", output);
+    let outputs: Vec<_> = probs
+        .data()
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| (config.id2label.get(&format!("{}", i)).unwrap(), p))
+        .collect();
+    println!("Probs {:?}", outputs);
     println!("Inference in {:?}", inference_start.elapsed());
     println!("Total Inference {:?}", start.elapsed());
     Ok(())

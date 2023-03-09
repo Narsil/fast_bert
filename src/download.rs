@@ -1,5 +1,5 @@
 use crate::BertError;
-use reqwest::header::{CONTENT_LENGTH, RANGE};
+use reqwest::header::{CONTENT_RANGE, RANGE};
 use std::io::SeekFrom;
 use std::sync::Arc;
 use tokio::io::AsyncSeekExt;
@@ -13,30 +13,21 @@ pub async fn download(
     chunk_size: usize,
 ) -> Result<(), BertError> {
     let client = reqwest::Client::new();
-    let response = client.head(url).send().await?;
     let response = client
-        .get(&url)
+        .get(url)
         .header(RANGE, "bytes=0-0".to_string())
         .send()
-        .await
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+        .await?;
     let content_range = response
         .headers()
         .get(CONTENT_RANGE)
-        .ok_or(PyException::new_err("No content length"))?
-        .to_str()
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+        .ok_or(BertError::NoContentLength)?
+        .to_str()?;
 
     let size: Vec<&str> = content_range.split('/').collect();
     // Content-Range: bytes 0-0/702517648
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
-    let length: usize = size
-        .last()
-        .ok_or(PyException::new_err(
-            "Error while downloading: No size was detected",
-        ))?
-        .parse()
-        .map_err(|err| PyException::new_err(format!("Error while downloading: {err:?}")))?;
+    let length: usize = size.last().ok_or(BertError::NoContentLength)?.parse()?;
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)

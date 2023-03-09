@@ -143,22 +143,19 @@ async fn inference((State(state), payload): (State<AppState>, String)) -> impl I
     let encoded = tokenizer.encode(payload.inputs, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
     let probs = state.model.forward(&encoded);
-    let mut max_p = 0;
-    let mut max = 0.0;
-    for (i, &p) in probs.data().iter().enumerate() {
-        if p > max {
-            max = p;
-            max_p = i;
-        }
-    }
-    let output = Output {
-        label: state
-            .config
-            .id2label()
-            .get(&format!("{}", max_p))
-            .unwrap()
-            .to_string(),
-        score: max,
-    };
-    Json(vec![output])
+    let outputs: Vec<_> = probs
+        .data()
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| Output {
+            label: state
+                .config
+                .id2label()
+                .get(&format!("{}", i))
+                .unwrap()
+                .to_string(),
+            score: p,
+        })
+        .collect();
+    Json(vec![outputs])
 }
