@@ -12,12 +12,15 @@ pub async fn download(
     max_files: usize,
     chunk_size: usize,
 ) -> Result<(), BertError> {
+    let start = std::time::Instant::now();
     let client = reqwest::Client::new();
     let response = client
         .get(url)
         .header(RANGE, "bytes=0-0".to_string())
         .send()
         .await?;
+
+    println!("Got headers {:?}", response.headers());
     let content_range = response
         .headers()
         .get(CONTENT_RANGE)
@@ -27,7 +30,7 @@ pub async fn download(
     let size: Vec<&str> = content_range.split('/').collect();
     // Content-Range: bytes 0-0/702517648
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
-    let length: usize = size.last().ok_or(BertError::NoContentLength)?.parse()?;
+    let length: usize = size.last().ok_or(BertError::ParseContentLength)?.parse()?;
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -58,6 +61,7 @@ pub async fn download(
         futures::future::join_all(handles).await;
     let results: Result<(), BertError> = results.into_iter().flatten().collect();
     results?;
+    println!("Downloaded {url:?} in {:?}", start.elapsed());
     Ok(())
 }
 

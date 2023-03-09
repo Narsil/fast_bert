@@ -29,6 +29,8 @@ pub enum BertError {
     AcquireError(#[from] tokio::sync::AcquireError),
     #[error("No content length")]
     NoContentLength,
+    #[error("Could not parse content length")]
+    ParseContentLength,
     #[error("JSON parsing error")]
     JSONError(#[from] serde_json::Error),
 }

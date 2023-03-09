@@ -18,10 +18,10 @@ COPY Cargo.lock .
 RUN sed -i 's#src/main.rs#dummy.rs#' Cargo.toml
 RUN source /opt/intel/oneapi/setvars.sh && cargo build --release --features intel-mkl
 RUN sed -i 's#dummy.rs#src/main.rs#' Cargo.toml
+RUN apt install -y libatlas-base-dev
 COPY src/ src/
 COPY . . 
 
-RUN apt install -y libatlas-base-dev
 RUN source /opt/intel/oneapi/setvars.sh && cargo build --release --features intel-mkl
 
 FROM gcr.io/distroless/cc-debian10
