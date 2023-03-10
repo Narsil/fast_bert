@@ -105,16 +105,8 @@ impl<'a> Mlp<'a> {
                 .tensor(&format!("bert.encoder.layer.{index}.output.dense.bias"))
                 .unwrap(),
         );
-        let output_ln = LayerNorm::from(
-            tensors
-                .tensor(&format!(
-                    "bert.encoder.layer.{index}.output.LayerNorm.weight"
-                ))
-                .unwrap(),
-            tensors
-                .tensor(&format!("bert.encoder.layer.{index}.output.LayerNorm.bias"))
-                .unwrap(),
-        );
+        let output_ln =
+            LayerNorm::from_prefix("bert.encoder.layer.{index}.output.LayerNorm", &tensors);
         Self {
             intermediate,
             output,
@@ -203,17 +195,9 @@ impl<'a> BertAttention<'a> {
                 ))
                 .unwrap(),
         );
-        let output_ln = LayerNorm::from(
-            tensors
-                .tensor(&format!(
-                    "bert.encoder.layer.{index}.attention.output.LayerNorm.weight"
-                ))
-                .unwrap(),
-            tensors
-                .tensor(&format!(
-                    "bert.encoder.layer.{index}.attention.output.LayerNorm.bias"
-                ))
-                .unwrap(),
+        let output_ln = LayerNorm::from_prefix(
+            "bert.encoder.layer.{index}.attention.output.LayerNorm",
+            &tensors,
         );
         Self {
             query,
@@ -264,22 +248,12 @@ impl<'a> BertAttention<'a> {
 
 #[derive(Clone)]
 pub struct BertLayer<'a> {
-    // ln_1: LayerNorm<'a>,
-    // ln_2: LayerNorm<'a>,
     mlp: Mlp<'a>,
     attention: BertAttention<'a>,
 }
 
 impl<'a> BertLayer<'a> {
     fn from_tensors(index: usize, tensors: &'a SafeTensors<'a>, num_heads: usize) -> Self {
-        // let ln_1 = LayerNorm::from(
-        //     tensors.tensor(&format!("h.{index}.ln_1.weight")).unwrap(),
-        //     tensors.tensor(&format!("h.{index}.ln_1.bias")).unwrap(),
-        // );
-        // let ln_2 = LayerNorm::from(
-        //     tensors.tensor(&format!("h.{index}.ln_2.weight")).unwrap(),
-        //     tensors.tensor(&format!("h.{index}.ln_2.bias")).unwrap(),
-        // );
         let mlp = Mlp::from_tensors(index, tensors);
         let attention = BertAttention::from_tensors(index, tensors, num_heads);
         Self {
@@ -396,6 +370,21 @@ pub struct LayerNorm<'a> {
 }
 
 impl<'a> LayerNorm<'a> {
+    fn from_prefix(prefix: &str, tensors: &'a SafeTensors<'a>) -> Self {
+        let layer_norm = if let (Ok(weight), Ok(bias)) = (
+            tensors.tensor(&format!("{}.weight", prefix)),
+            tensors.tensor(&format!("{}.bias", prefix)),
+        ) {
+            LayerNorm::from(weight, bias)
+        } else {
+            LayerNorm::from(
+                tensors.tensor(&format!("{}.weight", prefix)).unwrap(),
+                tensors.tensor(&format!("{}.bias", prefix)).unwrap(),
+            )
+        };
+        layer_norm
+    }
+
     fn from(weight: TensorView<'a>, bias: TensorView<'a>) -> Self {
         let weight: ViewTensor = weight.into();
         let bias: ViewTensor = bias.into();
@@ -470,10 +459,8 @@ impl<'a> BertEmbeddings<'a> {
                 .tensor("bert.embeddings.token_type_embeddings.weight")
                 .unwrap(),
         );
-        let layer_norm = LayerNorm::from(
-            tensors.tensor("bert.embeddings.LayerNorm.weight").unwrap(),
-            tensors.tensor("bert.embeddings.LayerNorm.bias").unwrap(),
-        );
+
+        let layer_norm = LayerNorm::from_prefix("bert.embeddings.LayerNorm", &tensors);
         Self {
             wte,
             wpe,
