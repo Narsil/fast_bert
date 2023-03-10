@@ -116,10 +116,17 @@ async fn main() -> Result<(), BertError> {
     Ok(())
 }
 
+#[derive(Deserialize, Default)]
+struct Parameters{
+    top_k: Option<usize>
+}
+
 // the input to our `create_user` handler
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct Inputs {
     inputs: String,
+    #[serde(default)]
+    parameters: Parameters
 }
 
 // the output to our `create_user` handler
@@ -137,13 +144,13 @@ async fn inference((State(state), payload): (State<AppState>, String)) -> impl I
     let payload: Inputs = if let Ok(payload) = serde_json::from_str(&payload) {
         payload
     } else {
-        Inputs { inputs: payload }
+        Inputs { inputs: payload, ..Default::default() }
     };
     let tokenizer = state.tokenizer;
     let encoded = tokenizer.encode(payload.inputs, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
     let probs = state.model.forward(&encoded);
-    let outputs: Vec<_> = probs
+    let mut outputs: Vec<_> = probs
         .data()
         .iter()
         .enumerate()
@@ -157,5 +164,9 @@ async fn inference((State(state), payload): (State<AppState>, String)) -> impl I
             score: p,
         })
         .collect();
+    outputs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    if let Some(top_k) = payload.parameters.top_k{
+        outputs = outputs.into_iter().take(top_k).collect()
+    }
     Json(vec![outputs])
 }
