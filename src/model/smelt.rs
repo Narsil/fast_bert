@@ -378,8 +378,8 @@ impl<'a> LayerNorm<'a> {
             LayerNorm::from(weight, bias)
         } else {
             LayerNorm::from(
-                tensors.tensor(&format!("{}.weight", prefix)).unwrap(),
-                tensors.tensor(&format!("{}.bias", prefix)).unwrap(),
+                tensors.tensor(&format!("{}.gamma", prefix)).unwrap(),
+                tensors.tensor(&format!("{}.beta", prefix)).unwrap(),
             )
         };
         layer_norm
