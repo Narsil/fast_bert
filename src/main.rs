@@ -78,7 +78,7 @@ async fn main() -> Result<(), BertError> {
         std::env::set_var("RUST_LOG", "fast_bert=debug,tower_http=debug")
     }
     tracing_subscriber::fmt::init();
-    let model_id: String = std::env::var("MODEL_ID").unwrap().into();
+    let model_id: String = std::env::var("MODEL_ID").unwrap();
     let model = get_model(&model_id, "model.safetensors").await?;
     let tokenizer = get_tokenizer(&model_id, "tokenizer.json").await?;
     let config = get_config(&model_id, "config.json").await?;

@@ -30,8 +30,7 @@ fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
             });
         });
     });
-    let query = OwnedTensor::new(query_data, vec![num_heads, sequence_length, head_dim]).unwrap();
-    query
+    OwnedTensor::new(query_data, vec![num_heads, sequence_length, head_dim]).unwrap()
 }
 
 fn attention<T: Tensor, TM: TensorMut>(

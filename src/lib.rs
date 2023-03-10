@@ -53,7 +53,7 @@ pub async fn run() -> Result<(), BertError> {
     let model_id = std::env::var("MODEL_ID")
         .expect("Please set MODEL_ID in your environment to load the correct model");
 
-    let model_id_slug = model_id.replace("/", "-");
+    let model_id_slug = model_id.replace('/', "-");
 
     let filename = format!("model-{model_id_slug}.safetensors");
     let max_files = 100;
