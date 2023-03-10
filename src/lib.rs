@@ -38,12 +38,12 @@ pub enum BertError {
 #[derive(Clone, Deserialize)]
 pub struct Config {
     num_attention_heads: usize,
-    id2label: HashMap<String, String>,
+    id2label: Option<HashMap<String, String>>,
 }
 
 impl Config {
-    pub fn id2label(&self) -> &HashMap<String, String> {
-        &self.id2label
+    pub fn id2label(&self) -> Option<&HashMap<String, String>> {
+        self.id2label.as_ref()
     }
 }
 
@@ -98,16 +98,24 @@ pub async fn run() -> Result<(), BertError> {
     println!("Loaded & encoded {:?}", start.elapsed());
     let inference_start = std::time::Instant::now();
     let probs = bert.forward(&encoded);
+
+    let id2label = config.id2label();
     let outputs: Vec<_> = probs
         .data()
         .iter()
         .enumerate()
-        .map(|(i, &p)| (config.id2label.get(&format!("{}", i)).unwrap(), p))
+        .map(|(i, &p)| (get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)), p))
         .collect();
     println!("Probs {:?}", outputs);
     println!("Inference in {:?}", inference_start.elapsed());
     println!("Total Inference {:?}", start.elapsed());
     Ok(())
+}
+
+pub fn get_label(id2label: Option<&HashMap<String, String>>, i: usize) -> Option<String> {
+    let id2label: &HashMap<String, String> = id2label?;
+    let label: String = id2label.get(&format!("{}", i))?.to_string();
+    Some(label)
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use fast_bert::{download::download, model::Bert, BertError, Config};
+use fast_bert::{download::download, model::Bert, BertError, Config, get_label};
 use memmap2::{Mmap, MmapOptions};
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
@@ -117,8 +117,8 @@ async fn main() -> Result<(), BertError> {
 }
 
 #[derive(Deserialize, Default)]
-struct Parameters{
-    top_k: Option<usize>
+struct Parameters {
+    top_k: Option<usize>,
 }
 
 // the input to our `create_user` handler
@@ -126,7 +126,7 @@ struct Parameters{
 struct Inputs {
     inputs: String,
     #[serde(default)]
-    parameters: Parameters
+    parameters: Parameters,
 }
 
 // the output to our `create_user` handler
@@ -144,28 +144,27 @@ async fn inference((State(state), payload): (State<AppState>, String)) -> impl I
     let payload: Inputs = if let Ok(payload) = serde_json::from_str(&payload) {
         payload
     } else {
-        Inputs { inputs: payload, ..Default::default() }
+        Inputs {
+            inputs: payload,
+            ..Default::default()
+        }
     };
     let tokenizer = state.tokenizer;
     let encoded = tokenizer.encode(payload.inputs, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
     let probs = state.model.forward(&encoded);
+    let id2label = state.config.id2label();
     let mut outputs: Vec<_> = probs
         .data()
         .iter()
         .enumerate()
         .map(|(i, &p)| Output {
-            label: state
-                .config
-                .id2label()
-                .get(&format!("{}", i))
-                .unwrap()
-                .to_string(),
+            label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
             score: p,
         })
         .collect();
     outputs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-    if let Some(top_k) = payload.parameters.top_k{
+    if let Some(top_k) = payload.parameters.top_k {
         outputs = outputs.into_iter().take(top_k).collect()
     }
     Json(vec![outputs])
