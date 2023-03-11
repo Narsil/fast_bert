@@ -90,12 +90,15 @@ pub async fn run() -> Result<(), BertError> {
     let config: Config = serde_json::from_str(&config_str).expect("Could not parse Config");
 
     let bert = Bert::from_tensors(&tensors, config.num_attention_heads);
+    println!("Loaded {:?}", start.elapsed());
 
+    let string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje";
     let string = "My name is";
 
     let encoded = tokenizer.encode(string, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
     println!("Loaded & encoded {:?}", start.elapsed());
+    for _ in 0..10{
     let inference_start = std::time::Instant::now();
     let probs = bert.forward(&encoded);
 
@@ -108,6 +111,7 @@ pub async fn run() -> Result<(), BertError> {
         .collect();
     println!("Probs {:?}", outputs);
     println!("Inference in {:?}", inference_start.elapsed());
+    }
     println!("Total Inference {:?}", start.elapsed());
     Ok(())
 }

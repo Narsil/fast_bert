@@ -106,7 +106,7 @@ impl<'a> Mlp<'a> {
                 .unwrap(),
         );
         let output_ln =
-            LayerNorm::from_prefix("bert.encoder.layer.{index}.output.LayerNorm", &tensors);
+            LayerNorm::from_prefix(&format!("bert.encoder.layer.{index}.output.LayerNorm"), &tensors);
         Self {
             intermediate,
             output,
@@ -196,7 +196,7 @@ impl<'a> BertAttention<'a> {
                 .unwrap(),
         );
         let output_ln = LayerNorm::from_prefix(
-            "bert.encoder.layer.{index}.attention.output.LayerNorm",
+            &format!("bert.encoder.layer.{index}.attention.output.LayerNorm"),
             &tensors,
         );
         Self {
@@ -499,10 +499,18 @@ impl<'a> Bert<'a> {
         let embeddings = BertEmbeddings::from_tensors(tensors);
         let encoder = BertEncoder::from_tensors(tensors, num_heads);
         let pooler = BertPooler::from_tensors(tensors);
-        let classifier = Linear::from(
-            tensors.tensor("classifier.weight").unwrap(),
-            tensors.tensor("classifier.bias").unwrap(),
-        );
+
+        let (weight, bias) = if let (Ok(weight), Ok(bias)) = 
+            (tensors.tensor("classifier.weight"), 
+            tensors.tensor("classifier.bias"))
+             {
+            (weight, bias)
+        }else{
+            (
+            tensors.tensor("cls.seq_relationship.weight").unwrap(),
+            tensors.tensor("cls.seq_relationship.bias").unwrap())
+        };
+        let classifier = Linear::from(weight, bias);
         let num_classes = classifier.weight.shape()[0];
         Self {
             encoder,

@@ -11,9 +11,12 @@ print(f"Loaded transformers {datetime.datetime.now() - start}")
 
 
 pipe = pipeline(task="text-classification", model="Narsil/finbert")
+string = "My name is"
+# string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje"
 print(f"Loaded in {datetime.datetime.now() - start}")
-inf_start = datetime.datetime.now()
-out = pipe("My name is")
-print(f"Inference took: {(datetime.datetime.now() - inf_start)}")
+for i in range(10):
+    inf_start = datetime.datetime.now()
+    out = pipe(string)
+    print(f"Inference took: {(datetime.datetime.now() - inf_start)}")
 print(out)
 print(f"Ran in {(datetime.datetime.now() - start)}")

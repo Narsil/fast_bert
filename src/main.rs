@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use fast_bert::{download::download, model::Bert, BertError, Config, get_label};
+use fast_bert::{download::download, get_label, model::Bert, BertError, Config};
 use memmap2::{Mmap, MmapOptions};
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
