@@ -1,19 +1,10 @@
 use safetensors::tensor::{SafeTensors, TensorView};
-use smelt::ops::{add, gelu, matmul, matmul_t, mul, normalize, select, softmax};
+use smelt::ops::{
+    add, apply, faster_gelu, gelu, matmul, matmul_t, mul, normalize, par_apply, select, softmax,
+};
 use smelt::tensor::{OwnedTensor, Tensor, TensorMut, ViewTensor};
 use tokenizers::Encoding;
 
-// macro_rules! debug {
-//     ($string: expr, $tensor: expr) => {
-//         let data = &$tensor.data();
-//         println!(
-//             "{:?} {:?} {:?}",
-//             $string,
-//             &data[..3],
-//             &data[data.len() - 3..]
-//         );
-//     };
-// }
 fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
     let sequence_length = q.shape()[0];
     let hidden_dim = q.shape()[1];
@@ -105,8 +96,10 @@ impl<'a> Mlp<'a> {
                 .tensor(&format!("bert.encoder.layer.{index}.output.dense.bias"))
                 .unwrap(),
         );
-        let output_ln =
-            LayerNorm::from_prefix(&format!("bert.encoder.layer.{index}.output.LayerNorm"), &tensors);
+        let output_ln = LayerNorm::from_prefix(
+            &format!("bert.encoder.layer.{index}.output.LayerNorm"),
+            &tensors,
+        );
         Self {
             intermediate,
             output,
@@ -121,7 +114,7 @@ impl<'a> Mlp<'a> {
         // println!("Intermediate {:?}", self.intermediate.bias.shape());
         self.intermediate.forward(tensor);
         // println!("Intermediate after {:?}", tensor.shape());
-        gelu(tensor);
+        par_apply(tensor, faster_gelu);
         // let tmp = tensor.data();
         // println!("After gelu {:?} {:?}", &tmp[..5], &tmp[tmp.len() - 5..]);
         // println!("Output {:?}", tensor.shape());
@@ -397,10 +390,7 @@ impl<'a> LayerNorm<'a> {
     }
 
     fn forward(&self, tensor: &mut OwnedTensor) {
-        let m = tensor.shape()[0];
-        let mut mean = vec![0.0; m];
-        let mut var = vec![0.0; m];
-        normalize(tensor, &mut mean, &mut var, self.epsilon).unwrap();
+        normalize(tensor, self.epsilon).unwrap();
         mul(&self.weight, tensor).unwrap();
         add(&self.bias, tensor).unwrap();
     }
@@ -500,15 +490,16 @@ impl<'a> Bert<'a> {
         let encoder = BertEncoder::from_tensors(tensors, num_heads);
         let pooler = BertPooler::from_tensors(tensors);
 
-        let (weight, bias) = if let (Ok(weight), Ok(bias)) = 
-            (tensors.tensor("classifier.weight"), 
-            tensors.tensor("classifier.bias"))
-             {
+        let (weight, bias) = if let (Ok(weight), Ok(bias)) = (
+            tensors.tensor("classifier.weight"),
+            tensors.tensor("classifier.bias"),
+        ) {
             (weight, bias)
-        }else{
+        } else {
             (
-            tensors.tensor("cls.seq_relationship.weight").unwrap(),
-            tensors.tensor("cls.seq_relationship.bias").unwrap())
+                tensors.tensor("cls.seq_relationship.weight").unwrap(),
+                tensors.tensor("cls.seq_relationship.bias").unwrap(),
+            )
         };
         let classifier = Linear::from(weight, bias);
         let num_classes = classifier.weight.shape()[0];

@@ -1,4 +1,5 @@
 import datetime
+import os
 
 start = datetime.datetime.now()
 import torch
@@ -11,8 +12,8 @@ print(f"Loaded transformers {datetime.datetime.now() - start}")
 
 
 pipe = pipeline(task="text-classification", model="Narsil/finbert")
-string = "My name is"
-# string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje"
+default_string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje"
+string = os.getenv("STRING", default_string)
 print(f"Loaded in {datetime.datetime.now() - start}")
 for i in range(10):
     inf_start = datetime.datetime.now()

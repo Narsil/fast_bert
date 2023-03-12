@@ -92,8 +92,9 @@ pub async fn run() -> Result<(), BertError> {
     let bert = Bert::from_tensors(&tensors, config.num_attention_heads);
     println!("Loaded {:?}", start.elapsed());
 
-    let string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje";
-    let string = "My name is";
+    let default_string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje";
+    let string = std::env::var("STRING").unwrap_or(default_string.to_string());
+
 
     let encoded = tokenizer.encode(string, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
