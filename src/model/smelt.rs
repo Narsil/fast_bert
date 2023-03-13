@@ -1,7 +1,5 @@
 use safetensors::tensor::{SafeTensors, TensorView};
-use smelt::ops::{
-    add, apply, faster_gelu, gelu, matmul, matmul_t, mul, normalize, par_apply, select, softmax,
-};
+use smelt::ops::{add, apply, gelu, matmul, matmul_t, mul, normalize, select, softmax};
 use smelt::tensor::{OwnedTensor, Tensor, TensorMut, ViewTensor};
 use tokenizers::Encoding;
 
@@ -29,7 +27,6 @@ fn attention<T: Tensor, TM: TensorMut>(
     key: &T,
     value: &T,
     qk: &mut TM,
-    max: &mut [f32],
     out: &mut OwnedTensor,
 ) {
     let sequence_length = query.shape()[0];
@@ -51,7 +48,7 @@ fn attention<T: Tensor, TM: TensorMut>(
     let scale = (head_dim as f32).sqrt();
     qk.data_mut().iter_mut().for_each(|v| *v /= scale);
 
-    softmax(qk, max).unwrap();
+    softmax(qk).unwrap();
     matmul(qk, &value, out).unwrap();
 
     let mut new_out = vec![0.0; sequence_length * hidden_dim];
@@ -114,7 +111,7 @@ impl<'a> Mlp<'a> {
         // println!("Intermediate {:?}", self.intermediate.bias.shape());
         self.intermediate.forward(tensor);
         // println!("Intermediate after {:?}", tensor.shape());
-        par_apply(tensor, faster_gelu);
+        apply(tensor, gelu);
         // let tmp = tensor.data();
         // println!("After gelu {:?} {:?}", &tmp[..5], &tmp[tmp.len() - 5..]);
         // println!("Output {:?}", tensor.shape());
@@ -226,8 +223,7 @@ impl<'a> BertAttention<'a> {
         let head_dim = hidden_dim / num_heads;
         let mut qk = OwnedTensor::zeros(vec![num_heads, sequence_length, sequence_length]);
         let mut qv = OwnedTensor::zeros(vec![num_heads, sequence_length, head_dim]);
-        let mut max = vec![0.0; (sequence_length) * num_heads];
-        attention(&q, &k, &v, &mut qk, &mut max, &mut qv);
+        attention(&q, &k, &v, &mut qk, &mut qv);
 
         // debug!("After self attention", qv);
         // println!("qv {:?}", qv.shape());
@@ -481,7 +477,6 @@ pub struct Bert<'a> {
     encoder: BertEncoder<'a>,
     pooler: BertPooler<'a>,
     classifier: Linear<'a>,
-    num_classes: usize,
 }
 
 impl<'a> Bert<'a> {
@@ -502,13 +497,11 @@ impl<'a> Bert<'a> {
             )
         };
         let classifier = Linear::from(weight, bias);
-        let num_classes = classifier.weight.shape()[0];
         Self {
             encoder,
             pooler,
             embeddings,
             classifier,
-            num_classes,
         }
     }
 }
@@ -525,9 +518,8 @@ impl<'a> Bert<'a> {
         self.classifier.forward(&mut tensor);
         // debug!("outputs ", &tensor);
         let mut logits = tensor;
-        let mut max = vec![0.0; self.num_classes];
         // println!("logits {:?}", logits.shape());
-        softmax(&mut logits, &mut max).unwrap();
+        softmax(&mut logits).unwrap();
         // debug!("logits ", logits);
         logits
     }

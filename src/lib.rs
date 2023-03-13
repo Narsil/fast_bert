@@ -95,23 +95,22 @@ pub async fn run() -> Result<(), BertError> {
     let default_string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje";
     let string = std::env::var("STRING").unwrap_or(default_string.to_string());
 
-
     let encoded = tokenizer.encode(string, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
     println!("Loaded & encoded {:?}", start.elapsed());
-    for _ in 0..10{
-    let inference_start = std::time::Instant::now();
-    let probs = bert.forward(&encoded);
+    for _ in 0..5 {
+        let inference_start = std::time::Instant::now();
+        let probs = bert.forward(&encoded);
 
-    let id2label = config.id2label();
-    let outputs: Vec<_> = probs
-        .data()
-        .iter()
-        .enumerate()
-        .map(|(i, &p)| (get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)), p))
-        .collect();
-    println!("Probs {:?}", outputs);
-    println!("Inference in {:?}", inference_start.elapsed());
+        let id2label = config.id2label();
+        let outputs: Vec<_> = probs
+            .data()
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| (get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)), p))
+            .collect();
+        println!("Probs {:?}", outputs);
+        println!("Inference in {:?}", inference_start.elapsed());
     }
     println!("Total Inference {:?}", start.elapsed());
     Ok(())
