@@ -8,7 +8,6 @@ use fast_bert::{download::download, get_label, model::Bert, BertError, Config};
 use memmap2::{Mmap, MmapOptions};
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
-use smelt::tensor::Tensor;
 use std::fs::File;
 use std::net::SocketAddr;
 use tokenizers::Tokenizer;

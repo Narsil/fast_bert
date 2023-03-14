@@ -5,7 +5,6 @@ use crate::model::Bert;
 use memmap2::MmapOptions;
 use safetensors::tensor::{SafeTensorError, SafeTensors};
 use serde::Deserialize;
-use smelt::tensor::Tensor;
 use std::collections::HashMap;
 use std::fs::File;
 use thiserror::Error;

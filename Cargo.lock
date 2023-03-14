@@ -214,6 +214,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crunchy"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
+
+[[package]]
 name = "darling"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -331,6 +337,7 @@ dependencies = [
  "cblas-sys",
  "futures",
  "futures-util",
+ "half",
  "lazy_static",
  "libc",
  "memmap2",
@@ -503,6 +510,15 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "half"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02b4af3693f1b705df946e9fe5631932443781d0aabb423b62fcd4d73f6d2fd0"
+dependencies = [
+ "crunchy",
 ]
 
 [[package]]
@@ -1278,12 +1294,10 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 [[package]]
 name = "smelt"
 version = "0.1.0"
-source = "git+https://github.com/Narsil/smelt#b9b0b13beaebf5e13bcf267a45f478ec988b66fa"
+source = "git+https://github.com/Narsil/smelt#e62deb995f410c78075406566ea9fbb0364ce3e3"
 dependencies = [
  "cblas-sys",
  "libc",
- "log",
- "safetensors",
 ]
 
 [[package]]

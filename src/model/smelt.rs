@@ -1,9 +1,12 @@
-use safetensors::tensor::{SafeTensors, TensorView};
-use smelt::ops::{add, apply, gelu, matmul, matmul_t, mul, normalize, select, softmax};
-use smelt::tensor::{OwnedTensor, Tensor, TensorMut, ViewTensor};
+use safetensors::tensor::{Dtype, SafeTensors, TensorView};
+use smelt::cpu::f32::{
+    add, apply, gelu, inline_tanh, matmul, matmul_t, mul, normalize, select, softmax, Tensor,
+};
+use smelt::TensorError;
+use std::borrow::Cow;
 use tokenizers::Encoding;
 
-fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
+fn split_heads<'a>(q: &'a Tensor<'a>, num_heads: usize) -> Tensor<'a> {
     let sequence_length = q.shape()[0];
     let hidden_dim = q.shape()[1];
     assert_eq!(hidden_dim % num_heads, 0);
@@ -19,16 +22,10 @@ fn split_heads<T: Tensor>(q: &T, num_heads: usize) -> OwnedTensor {
             });
         });
     });
-    OwnedTensor::new(query_data, vec![num_heads, sequence_length, head_dim]).unwrap()
+    Tensor::new(query_data, vec![num_heads, sequence_length, head_dim]).unwrap()
 }
 
-fn attention<T: Tensor, TM: TensorMut>(
-    query: &T,
-    key: &T,
-    value: &T,
-    qk: &mut TM,
-    out: &mut OwnedTensor,
-) {
+fn attention(query: &Tensor, key: &Tensor, value: &Tensor, qk: &mut Tensor, out: &mut Tensor) {
     let sequence_length = query.shape()[0];
     let hidden_dim = query.shape()[1];
     let num_heads = qk.shape()[0];
@@ -61,7 +58,7 @@ fn attention<T: Tensor, TM: TensorMut>(
             });
         });
     });
-    *out = OwnedTensor::new(new_out, vec![sequence_length, hidden_dim]).unwrap();
+    *out = Tensor::new(new_out, vec![sequence_length, hidden_dim]).unwrap();
 }
 
 #[derive(Clone)]
@@ -104,7 +101,7 @@ impl<'a> Mlp<'a> {
         }
     }
 
-    fn forward(&self, tensor: &mut OwnedTensor) {
+    fn forward(&self, tensor: &mut Tensor) {
         let input_tensor = tensor.clone();
         // println!("Intermediate {:?}", tensor.shape());
         // println!("Intermediate {:?}", self.intermediate.weight.shape());
@@ -199,7 +196,7 @@ impl<'a> BertAttention<'a> {
         }
     }
 
-    pub fn forward(&self, hidden_states: &mut OwnedTensor) {
+    pub fn forward(&self, hidden_states: &mut Tensor) {
         // println!("---");
         //debug!("Attention", hidden_states);
         assert_eq!(hidden_states.shape().len(), 2);
@@ -221,8 +218,8 @@ impl<'a> BertAttention<'a> {
         let num_heads = self.num_heads;
         assert_eq!(hidden_dim % num_heads, 0);
         let head_dim = hidden_dim / num_heads;
-        let mut qk = OwnedTensor::zeros(vec![num_heads, sequence_length, sequence_length]);
-        let mut qv = OwnedTensor::zeros(vec![num_heads, sequence_length, head_dim]);
+        let mut qk = Tensor::zeros(vec![num_heads, sequence_length, sequence_length]);
+        let mut qv = Tensor::zeros(vec![num_heads, sequence_length, head_dim]);
         attention(&q, &k, &v, &mut qk, &mut qv);
 
         // debug!("After self attention", qv);
@@ -253,7 +250,7 @@ impl<'a> BertLayer<'a> {
         }
     }
 
-    fn forward(&self, tensor: &mut OwnedTensor) {
+    fn forward(&self, tensor: &mut Tensor) {
         // println!("==============");
         // debug!("Incoming", tensor);
 
@@ -285,7 +282,7 @@ impl<'a> BertEncoder<'a> {
         Self { layers }
     }
 
-    fn forward(&self, tensor: &mut OwnedTensor) {
+    fn forward(&self, tensor: &mut Tensor) {
         self.layers.iter().for_each(|layer| {
             layer.forward(tensor);
         });
@@ -294,8 +291,8 @@ impl<'a> BertEncoder<'a> {
 
 #[derive(Clone)]
 pub struct Linear<'a> {
-    weight: ViewTensor<'a>,
-    bias: ViewTensor<'a>,
+    weight: Tensor<'a>,
+    bias: Tensor<'a>,
 }
 
 impl<'a> std::fmt::Debug for Linear<'a> {
@@ -306,22 +303,47 @@ impl<'a> std::fmt::Debug for Linear<'a> {
     }
 }
 
+fn to_tensor<'data>(view: &TensorView<'data>) -> Result<Tensor<'data>, TensorError> {
+    let data = to_f32(view);
+    Tensor::new(data, view.shape().to_vec())
+}
+
+pub fn to_f32<'data>(view: &TensorView<'data>) -> Cow<'data, [f32]> {
+    assert_eq!(view.dtype(), Dtype::F32);
+    let v = view.data();
+    if (v.as_ptr() as usize) % 4 == 0 {
+        // SAFETY This is safe because we just checked that this
+        // was correctly aligned.
+        let data: &[f32] =
+            unsafe { std::slice::from_raw_parts(v.as_ptr() as *const f32, v.len() / 4) };
+        Cow::Borrowed(data)
+    } else {
+        let mut c = Vec::with_capacity(v.len() / 4);
+        let mut i = 0;
+        while i < v.len() {
+            c.push(f32::from_le_bytes([v[i], v[i + 1], v[i + 2], v[i + 3]]));
+            i += 4;
+        }
+        Cow::Owned(c)
+    }
+}
+
 impl<'a> Linear<'a> {
-    pub fn new(weight: ViewTensor<'a>, bias: ViewTensor<'a>) -> Self {
+    pub fn new(weight: Tensor<'a>, bias: Tensor<'a>) -> Self {
         Self { weight, bias }
     }
 
     fn from(weight: TensorView<'a>, bias: TensorView<'a>) -> Self {
-        let weight: ViewTensor = weight.into();
-        let bias: ViewTensor = bias.into();
+        let weight: Tensor<'a> = to_tensor(&weight).unwrap();
+        let bias: Tensor<'a> = to_tensor(&bias).unwrap();
         Self::new(weight, bias)
     }
 
-    pub fn forward(&self, tensor: &mut OwnedTensor) {
+    pub fn forward(&self, tensor: &mut Tensor) {
         assert_eq!(tensor.shape().len(), 2);
         let m = tensor.shape()[0];
         let n = self.weight.shape()[0];
-        let mut c = OwnedTensor::zeros(vec![m, n]);
+        let mut c = Tensor::zeros(vec![m, n]);
 
         matmul_t(tensor, &self.weight, &mut c).unwrap();
         add(&self.bias, &mut c).unwrap();
@@ -332,20 +354,20 @@ impl<'a> Linear<'a> {
 
 #[derive(Clone)]
 pub struct Embedding<'a> {
-    weight: ViewTensor<'a>,
+    weight: Tensor<'a>,
 }
 
 impl<'a> Embedding<'a> {
     fn from(weight: TensorView<'a>) -> Self {
-        let weight: ViewTensor = weight.into();
+        let weight: Tensor<'a> = to_tensor(&weight).unwrap();
         Self { weight }
     }
 
-    fn forward(&self, ids: &[u32]) -> OwnedTensor {
+    fn forward(&self, ids: &[u32]) -> Tensor {
         let _vocab_size = self.weight.shape()[0];
         let hidden_dim = self.weight.shape()[1];
         let shape = vec![ids.len(), hidden_dim];
-        let mut tensor = OwnedTensor::zeros(shape);
+        let mut tensor = Tensor::zeros(shape);
         select(ids, &self.weight, &mut tensor).unwrap();
         tensor
     }
@@ -353,8 +375,8 @@ impl<'a> Embedding<'a> {
 
 #[derive(Clone)]
 pub struct LayerNorm<'a> {
-    weight: ViewTensor<'a>,
-    bias: ViewTensor<'a>,
+    weight: Tensor<'a>,
+    bias: Tensor<'a>,
     epsilon: f32,
 }
 
@@ -375,8 +397,8 @@ impl<'a> LayerNorm<'a> {
     }
 
     fn from(weight: TensorView<'a>, bias: TensorView<'a>) -> Self {
-        let weight: ViewTensor = weight.into();
-        let bias: ViewTensor = bias.into();
+        let weight: Tensor<'a> = to_tensor(&weight).unwrap();
+        let bias: Tensor<'a> = to_tensor(&bias).unwrap();
         let epsilon = 1e-5;
         Self {
             weight,
@@ -385,7 +407,7 @@ impl<'a> LayerNorm<'a> {
         }
     }
 
-    fn forward(&self, tensor: &mut OwnedTensor) {
+    fn forward(&self, tensor: &mut Tensor) {
         normalize(tensor, self.epsilon).unwrap();
         mul(&self.weight, tensor).unwrap();
         add(&self.bias, tensor).unwrap();
@@ -406,14 +428,17 @@ impl<'a> BertPooler<'a> {
         Self { pooler }
     }
 
-    fn forward(&self, tensor: &mut OwnedTensor) {
+    fn forward(&self, tensor: &mut Tensor) {
         // debug!("Before pooler", tensor);
-        let mut first = OwnedTensor::zeros(vec![1, tensor.shape()[1]]);
+        let mut first = Tensor::zeros(vec![1, tensor.shape()[1]]);
         select(&[0], tensor, &mut first).unwrap();
         // debug!("select", first);
         self.pooler.forward(&mut first);
         // debug!("pooler", first);
-        first.data_mut().iter_mut().for_each(|v| *v = f32::tanh(*v));
+        first
+            .data_mut()
+            .iter_mut()
+            .for_each(|v| *v = inline_tanh(*v));
         // debug!("tanh", first);
         *tensor = first;
         // debug!("After", tensor);
@@ -456,7 +481,7 @@ impl<'a> BertEmbeddings<'a> {
     }
 }
 impl<'a> BertEmbeddings<'a> {
-    pub fn forward(&self, encoded: &Encoding) -> OwnedTensor {
+    pub fn forward(&self, encoded: &Encoding) -> Tensor {
         let ids = encoded.get_ids();
         let mut tensor = self.wte.forward(ids);
         let type_embeds = self.type_embeddings.forward(encoded.get_type_ids());
@@ -507,7 +532,7 @@ impl<'a> Bert<'a> {
 }
 
 impl<'a> Bert<'a> {
-    pub fn forward(&self, encoded: &Encoding) -> OwnedTensor {
+    pub fn forward(&self, encoded: &Encoding) -> Tensor {
         let mut tensor = self.embeddings.forward(encoded);
         // println!("tensor {:?}", tensor.shape());
         self.encoder.forward(&mut tensor);
