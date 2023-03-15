@@ -40,13 +40,13 @@ fn attention(query: &Tensor, key: &Tensor, value: &Tensor, qk: &mut Tensor, out:
     let key = split_heads(key, num_heads);
     let value = split_heads(value, num_heads);
 
-    matmul_t(&query, &key, qk).unwrap();
+    let mut qk = matmul_t(&query, &key).unwrap();
     let head_dim = hidden_dim / num_heads;
     let scale = (head_dim as f32).sqrt();
     qk.data_mut().iter_mut().for_each(|v| *v /= scale);
 
-    softmax(qk).unwrap();
-    matmul(qk, &value, out).unwrap();
+    softmax(&mut qk).unwrap();
+    let attended = matmul(&qk, &value).unwrap();
 
     let mut new_out = vec![0.0; sequence_length * hidden_dim];
     (0..num_heads).for_each(|i| {
@@ -54,7 +54,7 @@ fn attention(query: &Tensor, key: &Tensor, value: &Tensor, qk: &mut Tensor, out:
             (0..head_dim).for_each(|k| {
                 let in_index = i * sequence_length * head_dim + j * head_dim + k;
                 let out_index = j * hidden_dim + i * head_dim + k;
-                new_out[out_index] = out.data()[in_index];
+                new_out[out_index] = attended.data()[in_index];
             });
         });
     });
@@ -101,7 +101,7 @@ impl<'a> Mlp<'a> {
         }
     }
 
-    fn forward(&self, tensor: &mut Tensor) {
+    fn forward(&self, tensor: &mut Tensor<'a>) {
         let input_tensor = tensor.clone();
         // println!("Intermediate {:?}", tensor.shape());
         // println!("Intermediate {:?}", self.intermediate.weight.shape());
@@ -196,7 +196,7 @@ impl<'a> BertAttention<'a> {
         }
     }
 
-    pub fn forward(&self, hidden_states: &mut Tensor) {
+    pub fn forward(&self, hidden_states: &mut Tensor<'a>) {
         // println!("---");
         //debug!("Attention", hidden_states);
         assert_eq!(hidden_states.shape().len(), 2);
@@ -250,7 +250,7 @@ impl<'a> BertLayer<'a> {
         }
     }
 
-    fn forward(&self, tensor: &mut Tensor) {
+    fn forward(&self, tensor: &mut Tensor<'a>) {
         // println!("==============");
         // debug!("Incoming", tensor);
 
@@ -282,7 +282,7 @@ impl<'a> BertEncoder<'a> {
         Self { layers }
     }
 
-    fn forward(&self, tensor: &mut Tensor) {
+    fn forward(&self, tensor: &mut Tensor<'a>) {
         self.layers.iter().for_each(|layer| {
             layer.forward(tensor);
         });
@@ -339,13 +339,9 @@ impl<'a> Linear<'a> {
         Self::new(weight, bias)
     }
 
-    pub fn forward(&self, tensor: &mut Tensor) {
+    pub fn forward(&self, tensor: &mut Tensor<'a>) {
         assert_eq!(tensor.shape().len(), 2);
-        let m = tensor.shape()[0];
-        let n = self.weight.shape()[0];
-        let mut c = Tensor::zeros(vec![m, n]);
-
-        matmul_t(tensor, &self.weight, &mut c).unwrap();
+        let mut c = matmul_t(tensor, &self.weight).unwrap();
         add(&self.bias, &mut c).unwrap();
         //addmm(tensor, &self.weight, &self.bias, &mut c);
         *tensor = c;
@@ -364,11 +360,8 @@ impl<'a> Embedding<'a> {
     }
 
     fn forward(&self, ids: &[u32]) -> Tensor {
-        let _vocab_size = self.weight.shape()[0];
-        let hidden_dim = self.weight.shape()[1];
-        let shape = vec![ids.len(), hidden_dim];
-        let mut tensor = Tensor::zeros(shape);
-        select(ids, &self.weight, &mut tensor).unwrap();
+        let ids: Vec<usize> = ids.into_iter().map(|i| *i as usize).collect();
+        let tensor = select(&ids, &self.weight).unwrap();
         tensor
     }
 }
@@ -428,10 +421,8 @@ impl<'a> BertPooler<'a> {
         Self { pooler }
     }
 
-    fn forward(&self, tensor: &mut Tensor) {
-        // debug!("Before pooler", tensor);
-        let mut first = Tensor::zeros(vec![1, tensor.shape()[1]]);
-        select(&[0], tensor, &mut first).unwrap();
+    fn forward(&self, tensor: &mut Tensor<'a>) {
+        let mut first = select(&[0], tensor).unwrap();
         // debug!("select", first);
         self.pooler.forward(&mut first);
         // debug!("pooler", first);
@@ -529,9 +520,7 @@ impl<'a> Bert<'a> {
             classifier,
         }
     }
-}
 
-impl<'a> Bert<'a> {
     pub fn forward(&self, encoded: &Encoding) -> Tensor {
         let mut tensor = self.embeddings.forward(encoded);
         // println!("tensor {:?}", tensor.shape());
