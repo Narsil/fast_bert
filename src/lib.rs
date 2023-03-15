@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use thiserror::Error;
 use tokenizers::Tokenizer;
+use crate::model::smelt::FromSafetensors;
 
 #[derive(Debug, Error)]
 pub enum BertError {
@@ -96,10 +97,13 @@ pub async fn run() -> Result<(), BertError> {
 
     let encoded = tokenizer.encode(string, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
+
+    let input_ids: Vec<_> = encoded.get_ids().iter().map(|i| *i as usize).collect();
+    let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
     println!("Loaded & encoded {:?}", start.elapsed());
     for _ in 0..5 {
         let inference_start = std::time::Instant::now();
-        let probs = bert.forward(&encoded);
+        let probs = bert.forward(&input_ids, &type_ids).unwrap();
 
         let id2label = config.id2label();
         let outputs: Vec<_> = probs
