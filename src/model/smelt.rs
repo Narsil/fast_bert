@@ -14,7 +14,7 @@ use std::borrow::Cow;
 pub use smelt::nn::models::bert::BertClassifier as Bert;
 
 pub trait FromSafetensors<'a> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>, num_heads: usize) -> Self
+    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized;
 }
@@ -81,12 +81,12 @@ fn layer_norm_from_prefix<'a>(prefix: &str, tensors: &'a SafeTensors<'a>) -> Lay
 }
 
 impl<'a> FromSafetensors<'a> for Bert<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>, num_heads: usize) -> Self
+    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized,
     {
-        let pooler = BertPooler::from_tensors(tensors, num_heads);
-        let bert = BertModel::from_tensors(tensors, num_heads);
+        let pooler = BertPooler::from_tensors(tensors);
+        let bert = BertModel::from_tensors(tensors);
         let (weight, bias) = if let (Ok(weight), Ok(bias)) = (
             tensors.tensor("classifier.weight"),
             tensors.tensor("classifier.bias"),
@@ -104,7 +104,7 @@ impl<'a> FromSafetensors<'a> for Bert<Tensor<'a>> {
 }
 
 impl<'a> FromSafetensors<'a> for BertPooler<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>, _num_heads: usize) -> Self
+    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized,
     {
@@ -117,18 +117,18 @@ impl<'a> FromSafetensors<'a> for BertPooler<Tensor<'a>> {
 }
 
 impl<'a> FromSafetensors<'a> for BertModel<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>, num_heads: usize) -> Self
+    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized,
     {
-        let embeddings = BertEmbeddings::from_tensors(tensors, num_heads);
-        let encoder = BertEncoder::from_tensors(tensors, num_heads);
+        let embeddings = BertEmbeddings::from_tensors(tensors);
+        let encoder = BertEncoder::from_tensors(tensors);
         BertModel::new(embeddings, encoder)
     }
 }
 
 impl<'a> FromSafetensors<'a> for BertEmbeddings<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>, _num_heads: usize) -> Self
+    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized,
     {
@@ -159,13 +159,13 @@ impl<'a> FromSafetensors<'a> for BertEmbeddings<Tensor<'a>> {
 }
 
 impl<'a> FromSafetensors<'a> for BertEncoder<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>, num_heads: usize) -> Self
+    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized,
     {
         // TODO ! Count heads from tensors present
         let layers: Vec<_> = (0..12)
-            .map(|i| bert_layer_from_tensors(i, tensors, num_heads))
+            .map(|i| bert_layer_from_tensors(i, tensors))
             .collect();
         Self::new(layers)
     }
@@ -174,16 +174,14 @@ impl<'a> FromSafetensors<'a> for BertEncoder<Tensor<'a>> {
 fn bert_layer_from_tensors<'a>(
     index: usize,
     tensors: &'a SafeTensors<'a>,
-    num_heads: usize,
 ) -> BertLayer<Tensor<'a>> {
-    let attention = bert_attention_from_tensors(index, tensors, num_heads);
+    let attention = bert_attention_from_tensors(index, tensors);
     let mlp = bert_mlp_from_tensors(index, tensors);
     BertLayer::new(attention, mlp)
 }
 fn bert_attention_from_tensors<'a>(
     index: usize,
     tensors: &'a SafeTensors<'a>,
-    num_heads: usize,
 ) -> BertAttention<Tensor<'a>> {
     let query = linear_from_prefix(
         &format!("bert.encoder.layer.{index}.attention.self.query"),
@@ -205,7 +203,7 @@ fn bert_attention_from_tensors<'a>(
         &format!("bert.encoder.layer.{index}.attention.output.LayerNorm"),
         &tensors,
     );
-    BertAttention::new(query, key, value, output, output_ln, num_heads)
+    BertAttention::new(query, key, value, output, output_ln)
 }
 
 fn bert_mlp_from_tensors<'a>(index: usize, tensors: &'a SafeTensors<'a>) -> Mlp<Tensor<'a>> {

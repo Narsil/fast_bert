@@ -1294,7 +1294,6 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 [[package]]
 name = "smelt"
 version = "0.1.0"
-source = "git+https://github.com/Narsil/smelt#23802feb08d458fef16b03f20f16ea70932dfe4f"
 dependencies = [
  "cblas-sys",
  "libc",
@@ -1406,7 +1405,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tokenizers"
 version = "0.13.2"
-source = "git+https://github.com/huggingface/tokenizers?branch=main#9c0e700212e45e6c14772be6f66bcf6f238c5f84"
+source = "git+https://github.com/huggingface/tokenizers?branch=main#5ecd329503a4ac137bf00442ede4d31140276eb1"
 dependencies = [
  "aho-corasick",
  "derive_builder",

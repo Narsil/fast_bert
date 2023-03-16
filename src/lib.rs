@@ -1,6 +1,7 @@
 pub mod download;
 pub mod model;
 use crate::download::download;
+use crate::model::smelt::FromSafetensors;
 use crate::model::Bert;
 use memmap2::MmapOptions;
 use safetensors::tensor::{SafeTensorError, SafeTensors};
@@ -9,7 +10,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use thiserror::Error;
 use tokenizers::Tokenizer;
-use crate::model::smelt::FromSafetensors;
 
 #[derive(Debug, Error)]
 pub enum BertError {
@@ -89,7 +89,7 @@ pub async fn run() -> Result<(), BertError> {
     let config_str: String = std::fs::read_to_string(filename).expect("Could not read config");
     let config: Config = serde_json::from_str(&config_str).expect("Could not parse Config");
 
-    let bert = Bert::from_tensors(&tensors, config.num_attention_heads);
+    let bert = Bert::from_tensors(&tensors);
     println!("Loaded {:?}", start.elapsed());
 
     let default_string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje";
@@ -98,12 +98,22 @@ pub async fn run() -> Result<(), BertError> {
     let encoded = tokenizer.encode(string, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
 
-    let input_ids: Vec<_> = encoded.get_ids().iter().map(|i| *i as usize).collect();
-    let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
     println!("Loaded & encoded {:?}", start.elapsed());
+
     for _ in 0..5 {
+        let input_ids: Vec<_> = encoded.get_ids().iter().map(|i| *i as usize).collect();
+        let position_ids: Vec<_> = (0..input_ids.len()).collect();
+        let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
+        let mut context = bert.new_context(
+            input_ids,
+            position_ids,
+            type_ids,
+            config.num_attention_heads,
+        );
         let inference_start = std::time::Instant::now();
-        let probs = bert.forward(&input_ids, &type_ids).unwrap();
+        bert.forward(&mut context).unwrap();
+
+        let probs = context.probs();
 
         let id2label = config.id2label();
         let outputs: Vec<_> = probs
