@@ -2,16 +2,14 @@ use safetensors::{
     tensor::{Dtype, TensorView},
     SafeTensors,
 };
-use smelt::cpu::f32::Tensor;
-use smelt::nn::layers::{Embedding, LayerNorm, Linear};
-use smelt::nn::models::bert::{
-    Bert as BertModel, BertAttention, BertEmbeddings, BertEncoder, BertLayer, BertPooler, Mlp,
+use smelte_rs::cpu::f32::Tensor;
+use smelte_rs::nn::layers::{Embedding, LayerNorm, Linear};
+pub use smelte_rs::nn::models::bert::BertClassifier;
+use smelte_rs::nn::models::bert::{
+    Bert, BertAttention, BertEmbeddings, BertEncoder, BertLayer, BertPooler, Mlp,
 };
-use smelt::TensorError;
+use smelte_rs::TensorError;
 use std::borrow::Cow;
-
-// Renamed
-pub use smelt::nn::models::bert::BertClassifier as Bert;
 
 pub trait FromSafetensors<'a> {
     fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
@@ -60,33 +58,13 @@ fn embedding_from<'a>(weights: TensorView<'a>) -> Embedding<Tensor<'a>> {
     Embedding::new(to_tensor(weights).unwrap())
 }
 
-fn layer_norm_from_prefix<'a>(prefix: &str, tensors: &'a SafeTensors<'a>) -> LayerNorm<Tensor<'a>> {
-    let epsilon = 1e-5;
-    if let (Ok(weight), Ok(bias)) = (
-        tensors.tensor(&format!("{}.weight", prefix)),
-        tensors.tensor(&format!("{}.bias", prefix)),
-    ) {
-        LayerNorm::new(
-            to_tensor(weight).unwrap(),
-            to_tensor(bias).unwrap(),
-            epsilon,
-        )
-    } else {
-        LayerNorm::new(
-            to_tensor(tensors.tensor(&format!("{}.gamma", prefix)).unwrap()).unwrap(),
-            to_tensor(tensors.tensor(&format!("{}.beta", prefix)).unwrap()).unwrap(),
-            epsilon,
-        )
-    }
-}
-
-impl<'a> FromSafetensors<'a> for Bert<Tensor<'a>> {
+impl<'a> FromSafetensors<'a> for BertClassifier<Tensor<'a>> {
     fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized,
     {
         let pooler = BertPooler::from_tensors(tensors);
-        let bert = BertModel::from_tensors(tensors);
+        let bert = Bert::from_tensors(tensors);
         let (weight, bias) = if let (Ok(weight), Ok(bias)) = (
             tensors.tensor("classifier.weight"),
             tensors.tensor("classifier.bias"),
@@ -116,14 +94,14 @@ impl<'a> FromSafetensors<'a> for BertPooler<Tensor<'a>> {
     }
 }
 
-impl<'a> FromSafetensors<'a> for BertModel<Tensor<'a>> {
+impl<'a> FromSafetensors<'a> for Bert<Tensor<'a>> {
     fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
     where
         Self: Sized,
     {
         let embeddings = BertEmbeddings::from_tensors(tensors);
         let encoder = BertEncoder::from_tensors(tensors);
-        BertModel::new(embeddings, encoder)
+        Bert::new(embeddings, encoder)
     }
 }
 
@@ -155,19 +133,6 @@ impl<'a> FromSafetensors<'a> for BertEmbeddings<Tensor<'a>> {
             type_embeddings,
             layer_norm,
         )
-    }
-}
-
-impl<'a> FromSafetensors<'a> for BertEncoder<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
-    where
-        Self: Sized,
-    {
-        // TODO ! Count heads from tensors present
-        let layers: Vec<_> = (0..12)
-            .map(|i| bert_layer_from_tensors(i, tensors))
-            .collect();
-        Self::new(layers)
     }
 }
 
@@ -217,4 +182,36 @@ fn bert_mlp_from_tensors<'a>(index: usize, tensors: &'a SafeTensors<'a>) -> Mlp<
         &tensors,
     );
     Mlp::new(intermediate, output, output_ln)
+}
+
+fn layer_norm_from_prefix<'a>(prefix: &str, tensors: &'a SafeTensors<'a>) -> LayerNorm<Tensor<'a>> {
+    let epsilon = 1e-5;
+    if let (Ok(weight), Ok(bias)) = (
+        tensors.tensor(&format!("{}.weight", prefix)),
+        tensors.tensor(&format!("{}.bias", prefix)),
+    ) {
+        LayerNorm::new(
+            to_tensor(weight).unwrap(),
+            to_tensor(bias).unwrap(),
+            epsilon,
+        )
+    } else {
+        LayerNorm::new(
+            to_tensor(tensors.tensor(&format!("{}.gamma", prefix)).unwrap()).unwrap(),
+            to_tensor(tensors.tensor(&format!("{}.beta", prefix)).unwrap()).unwrap(),
+            epsilon,
+        )
+    }
+}
+impl<'a> FromSafetensors<'a> for BertEncoder<Tensor<'a>> {
+    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
+    where
+        Self: Sized,
+    {
+        // TODO ! Count heads from tensors present
+        let layers: Vec<_> = (0..12)
+            .map(|i| bert_layer_from_tensors(i, tensors))
+            .collect();
+        Self::new(layers)
+    }
 }

@@ -4,10 +4,16 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use fast_bert::{download::download, get_label, model::Bert, BertError, Config};
+use fast_bert::{
+    download::download,
+    get_label,
+    model::smelt::{BertClassifier, FromSafetensors},
+    BertError, Config,
+};
 use memmap2::{Mmap, MmapOptions};
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
+use smelte_rs::cpu::f32::Tensor;
 use std::fs::File;
 use std::net::SocketAddr;
 use tokenizers::Tokenizer;
@@ -16,7 +22,7 @@ use tracing::{instrument, Level};
 
 #[derive(Clone)]
 struct AppState {
-    model: Bert<'static>,
+    model: BertClassifier<Tensor<'static>>,
     config: Config,
     tokenizer: Tokenizer,
 }
@@ -27,7 +33,10 @@ fn leak_buffer(buffer: Mmap) -> &'static [u8] {
 }
 
 #[instrument]
-async fn get_model(model_id: &str, filename: &str) -> Result<Bert<'static>, BertError> {
+async fn get_model(
+    model_id: &str,
+    filename: &str,
+) -> Result<BertClassifier<Tensor<'static>>, BertError> {
     let max_files = 100;
     let chunk_size = 10_000_000;
     if !std::path::Path::new(filename).exists() {
@@ -41,7 +50,9 @@ async fn get_model(model_id: &str, filename: &str) -> Result<Bert<'static>, Bert
     let tensors: SafeTensors<'static> = SafeTensors::deserialize(buffer)?;
     let tensors: &'static SafeTensors<'static> = Box::leak(Box::new(tensors));
     let num_heads = 12;
-    Ok(Bert::from_tensors(tensors, num_heads))
+    let mut bert = BertClassifier::from_tensors(tensors);
+    bert.set_num_heads(num_heads);
+    Ok(bert)
 }
 
 #[instrument]
@@ -77,7 +88,7 @@ async fn main() -> Result<(), BertError> {
         std::env::set_var("RUST_LOG", "fast_bert=debug,tower_http=debug")
     }
     tracing_subscriber::fmt::init();
-    let model_id: String = std::env::var("MODEL_ID").unwrap();
+    let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
     let model = get_model(&model_id, "model.safetensors").await?;
     let tokenizer = get_tokenizer(&model_id, "tokenizer.json").await?;
     let config = get_config(&model_id, "config.json").await?;
@@ -151,7 +162,10 @@ async fn inference((State(state), payload): (State<AppState>, String)) -> impl I
     let tokenizer = state.tokenizer;
     let encoded = tokenizer.encode(payload.inputs, false).unwrap();
     let encoded = tokenizer.post_process(encoded, None, true).unwrap();
-    let probs = state.model.forward(&encoded);
+    let input_ids: Vec<_> = encoded.get_ids().iter().map(|i| *i as usize).collect();
+    let position_ids: Vec<_> = (0..input_ids.len()).collect();
+    let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
+    let probs = state.model.run(input_ids, position_ids, type_ids).unwrap();
     let id2label = state.config.id2label();
     let mut outputs: Vec<_> = probs
         .data()

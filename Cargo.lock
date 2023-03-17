@@ -214,12 +214,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crunchy"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
-
-[[package]]
 name = "darling"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -337,7 +331,6 @@ dependencies = [
  "cblas-sys",
  "futures",
  "futures-util",
- "half",
  "lazy_static",
  "libc",
  "memmap2",
@@ -345,7 +338,7 @@ dependencies = [
  "safetensors",
  "serde",
  "serde_json",
- "smelt",
+ "smelte-rs",
  "thiserror",
  "tokenizers",
  "tokio",
@@ -510,15 +503,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "half"
-version = "2.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b4af3693f1b705df946e9fe5631932443781d0aabb423b62fcd4d73f6d2fd0"
-dependencies = [
- "crunchy",
 ]
 
 [[package]]
@@ -1292,9 +1276,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 
 [[package]]
-name = "smelt"
+name = "smelte-rs"
 version = "0.1.0"
-source = "git+https://github.com/Narsil/smelt#e5abe8824fe439a2c05602b551f0c82bc0c31837"
+source = "git+https://github.com/Narsil/smelte-rs#c1187085c2b5387c14941149fa3b1bbd9f405bd7"
 dependencies = [
  "cblas-sys",
  "libc",

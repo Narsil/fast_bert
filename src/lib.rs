@@ -1,8 +1,8 @@
 pub mod download;
 pub mod model;
 use crate::download::download;
+use crate::model::smelt::BertClassifier;
 use crate::model::smelt::FromSafetensors;
-use crate::model::Bert;
 use memmap2::MmapOptions;
 use safetensors::tensor::{SafeTensorError, SafeTensors};
 use serde::Deserialize;
@@ -89,7 +89,7 @@ pub async fn run() -> Result<(), BertError> {
     let config_str: String = std::fs::read_to_string(filename).expect("Could not read config");
     let config: Config = serde_json::from_str(&config_str).expect("Could not parse Config");
 
-    let bert = Bert::from_tensors(&tensors);
+    let bert = BertClassifier::from_tensors(&tensors);
     println!("Loaded {:?}", start.elapsed());
 
     let default_string = "test eqwlewqk ewqlke qwlkeqwl ewlqke qwlke eklqwekwqlek qwlkeqwl ekqwlk eqwlke qwlke qwlke qwlkelqw elqwkelwk elkw elkqwel qwel qwle kqwejqwkehjqwjkeh qwjkhe qwjkhekqweh qwjkeh qwjkeh qwkje";
@@ -149,7 +149,7 @@ mod tests {
 
         let filename = "tokenizer.json";
         let tokenizer = Tokenizer::from_file(filename).unwrap();
-        let bert = Bert::from_tensors(&tensors, num_heads);
+        let bert = BertClassifier::from_tensors(&tensors);
         let string = "My name is";
         let encoded = tokenizer.encode(string, false).unwrap();
         let _logits = bert.forward(&encoded);
