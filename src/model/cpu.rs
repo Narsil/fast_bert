@@ -2,28 +2,29 @@ use safetensors::{
     tensor::{Dtype, TensorView},
     SafeTensors,
 };
-use smelte_rs::cpu::f32::Tensor;
 use smelte_rs::nn::layers::{Embedding, LayerNorm, Linear};
 pub use smelte_rs::nn::models::bert::BertClassifier;
 use smelte_rs::nn::models::bert::{
     Bert, BertAttention, BertEmbeddings, BertEncoder, BertLayer, BertPooler, Mlp,
 };
-use smelte_rs::TensorError;
+use smelte_rs::SmeltError;
 use std::borrow::Cow;
 
-pub trait FromSafetensors<'a> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
+use smelte_rs::cpu::f32::{Device, Tensor};
+
+pub trait FromSafetensors {
+    fn from_tensors(tensors: &SafeTensors, _device: &Device) -> Self
     where
         Self: Sized;
 }
 
-fn to_tensor<'data>(view: TensorView<'data>) -> Result<Tensor<'data>, TensorError> {
+fn to_tensor(view: TensorView) -> Result<Tensor, SmeltError> {
     let shape = view.shape().to_vec();
     let data = to_f32(view);
     Tensor::new(data, shape)
 }
 
-pub fn to_f32<'data>(view: TensorView<'data>) -> Cow<'data, [f32]> {
+pub fn to_f32(view: TensorView) -> Cow<'static, [f32]> {
     assert_eq!(view.dtype(), Dtype::F32);
     let v = view.data();
     if (v.as_ptr() as usize) % 4 == 0 {
@@ -43,28 +44,28 @@ pub fn to_f32<'data>(view: TensorView<'data>) -> Cow<'data, [f32]> {
     }
 }
 
-fn linear_from<'a>(weights: TensorView<'a>, bias: TensorView<'a>) -> Linear<Tensor<'a>> {
+fn linear_from(weights: TensorView, bias: TensorView) -> Linear<Tensor> {
     Linear::new(to_tensor(weights).unwrap(), to_tensor(bias).unwrap())
 }
 
-fn linear_from_prefix<'a>(prefix: &str, tensors: &'a SafeTensors<'a>) -> Linear<Tensor<'a>> {
+fn linear_from_prefix(prefix: &str, tensors: &SafeTensors) -> Linear<Tensor> {
     linear_from(
         tensors.tensor(&format!("{}.weight", prefix)).unwrap(),
         tensors.tensor(&format!("{}.bias", prefix)).unwrap(),
     )
 }
 
-fn embedding_from<'a>(weights: TensorView<'a>) -> Embedding<Tensor<'a>> {
+fn embedding_from(weights: TensorView) -> Embedding<Tensor> {
     Embedding::new(to_tensor(weights).unwrap())
 }
 
-impl<'a> FromSafetensors<'a> for BertClassifier<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
+impl FromSafetensors for BertClassifier<Tensor> {
+    fn from_tensors(tensors: &SafeTensors, device: &Device) -> Self
     where
         Self: Sized,
     {
-        let pooler = BertPooler::from_tensors(tensors);
-        let bert = Bert::from_tensors(tensors);
+        let pooler = BertPooler::from_tensors(tensors, device);
+        let bert = Bert::from_tensors(tensors, device);
         let (weight, bias) = if let (Ok(weight), Ok(bias)) = (
             tensors.tensor("classifier.weight"),
             tensors.tensor("classifier.bias"),
@@ -81,8 +82,8 @@ impl<'a> FromSafetensors<'a> for BertClassifier<Tensor<'a>> {
     }
 }
 
-impl<'a> FromSafetensors<'a> for BertPooler<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
+impl FromSafetensors for BertPooler<Tensor> {
+    fn from_tensors(tensors: &SafeTensors, _device: &Device) -> Self
     where
         Self: Sized,
     {
@@ -94,19 +95,19 @@ impl<'a> FromSafetensors<'a> for BertPooler<Tensor<'a>> {
     }
 }
 
-impl<'a> FromSafetensors<'a> for Bert<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
+impl FromSafetensors for Bert<Tensor> {
+    fn from_tensors(tensors: &SafeTensors, device: &Device) -> Self
     where
         Self: Sized,
     {
-        let embeddings = BertEmbeddings::from_tensors(tensors);
-        let encoder = BertEncoder::from_tensors(tensors);
+        let embeddings = BertEmbeddings::from_tensors(tensors, device);
+        let encoder = BertEncoder::from_tensors(tensors, device);
         Bert::new(embeddings, encoder)
     }
 }
 
-impl<'a> FromSafetensors<'a> for BertEmbeddings<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
+impl FromSafetensors for BertEmbeddings<Tensor> {
+    fn from_tensors(tensors: &SafeTensors, _device: &Device) -> Self
     where
         Self: Sized,
     {
@@ -136,18 +137,12 @@ impl<'a> FromSafetensors<'a> for BertEmbeddings<Tensor<'a>> {
     }
 }
 
-fn bert_layer_from_tensors<'a>(
-    index: usize,
-    tensors: &'a SafeTensors<'a>,
-) -> BertLayer<Tensor<'a>> {
+fn bert_layer_from_tensors(index: usize, tensors: &SafeTensors) -> BertLayer<Tensor> {
     let attention = bert_attention_from_tensors(index, tensors);
     let mlp = bert_mlp_from_tensors(index, tensors);
     BertLayer::new(attention, mlp)
 }
-fn bert_attention_from_tensors<'a>(
-    index: usize,
-    tensors: &'a SafeTensors<'a>,
-) -> BertAttention<Tensor<'a>> {
+fn bert_attention_from_tensors(index: usize, tensors: &SafeTensors) -> BertAttention<Tensor> {
     let query = linear_from_prefix(
         &format!("bert.encoder.layer.{index}.attention.self.query"),
         tensors,
@@ -171,7 +166,7 @@ fn bert_attention_from_tensors<'a>(
     BertAttention::new(query, key, value, output, output_ln)
 }
 
-fn bert_mlp_from_tensors<'a>(index: usize, tensors: &'a SafeTensors<'a>) -> Mlp<Tensor<'a>> {
+fn bert_mlp_from_tensors(index: usize, tensors: &SafeTensors) -> Mlp<Tensor> {
     let intermediate = linear_from_prefix(
         &format!("bert.encoder.layer.{index}.intermediate.dense"),
         tensors,
@@ -184,7 +179,7 @@ fn bert_mlp_from_tensors<'a>(index: usize, tensors: &'a SafeTensors<'a>) -> Mlp<
     Mlp::new(intermediate, output, output_ln)
 }
 
-fn layer_norm_from_prefix<'a>(prefix: &str, tensors: &'a SafeTensors<'a>) -> LayerNorm<Tensor<'a>> {
+fn layer_norm_from_prefix(prefix: &str, tensors: &SafeTensors) -> LayerNorm<Tensor> {
     let epsilon = 1e-5;
     if let (Ok(weight), Ok(bias)) = (
         tensors.tensor(&format!("{}.weight", prefix)),
@@ -203,8 +198,8 @@ fn layer_norm_from_prefix<'a>(prefix: &str, tensors: &'a SafeTensors<'a>) -> Lay
         )
     }
 }
-impl<'a> FromSafetensors<'a> for BertEncoder<Tensor<'a>> {
-    fn from_tensors(tensors: &'a SafeTensors<'a>) -> Self
+impl FromSafetensors for BertEncoder<Tensor> {
+    fn from_tensors(tensors: &SafeTensors, _device: &Device) -> Self
     where
         Self: Sized,
     {

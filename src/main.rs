@@ -7,13 +7,16 @@ use axum::{
 use fast_bert::{
     download::download,
     get_label,
-    model::smelt::{BertClassifier, FromSafetensors},
+    model::{BertClassifier, FromSafetensors},
     BertError, Config,
 };
 use memmap2::{Mmap, MmapOptions};
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
-use smelte_rs::cpu::f32::Tensor;
+#[cfg(feature = "cpu")]
+use smelte_rs::cpu::f32::{Tensor, Device};
+#[cfg(feature = "gpu")]
+use smelte_rs::gpu::f32::{Tensor, Device};
 use std::fs::File;
 use std::net::SocketAddr;
 use tokenizers::Tokenizer;
@@ -22,7 +25,7 @@ use tracing::{instrument, Level};
 
 #[derive(Clone)]
 struct AppState {
-    model: BertClassifier<Tensor<'static>>,
+    model: BertClassifier<Tensor>,
     config: Config,
     tokenizer: Tokenizer,
 }
@@ -36,7 +39,7 @@ fn leak_buffer(buffer: Mmap) -> &'static [u8] {
 async fn get_model(
     model_id: &str,
     filename: &str,
-) -> Result<BertClassifier<Tensor<'static>>, BertError> {
+) -> Result<BertClassifier<Tensor>, BertError> {
     let max_files = 100;
     let chunk_size = 10_000_000;
     if !std::path::Path::new(filename).exists() {
@@ -50,7 +53,13 @@ async fn get_model(
     let tensors: SafeTensors<'static> = SafeTensors::deserialize(buffer)?;
     let tensors: &'static SafeTensors<'static> = Box::leak(Box::new(tensors));
     let num_heads = 12;
-    let mut bert = BertClassifier::from_tensors(tensors);
+
+    #[cfg(feature = "gpu")]
+    let device = Device::new(0).unwrap();
+    #[cfg(feature = "cpu")]
+    let device = Device{};
+
+    let mut bert = BertClassifier::from_tensors(tensors, &device);
     bert.set_num_heads(num_heads);
     Ok(bert)
 }
@@ -81,8 +90,20 @@ async fn get_tokenizer(model_id: &str, filename: &str) -> Result<Tokenizer, Bert
     Ok(Tokenizer::from_file(filename).unwrap())
 }
 
+#[cfg(feature = "gpu")]
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), BertError> {
+    start().await
+
+}
+
+#[cfg(feature = "cpu")]
 #[tokio::main]
 async fn main() -> Result<(), BertError> {
+    start().await
+}
+
+async fn start() -> Result<(), BertError> {
     // initialize tracing
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "fast_bert=debug,tower_http=debug")
@@ -167,6 +188,17 @@ async fn inference((State(state), payload): (State<AppState>, String)) -> impl I
     let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
     let probs = state.model.run(input_ids, position_ids, type_ids).unwrap();
     let id2label = state.config.id2label();
+    #[cfg(feature="gpu")]
+    let mut outputs: Vec<_> = probs
+        .cpu_data().unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| Output {
+            label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
+            score: p,
+        })
+        .collect();
+    #[cfg(feature="cpu")]
     let mut outputs: Vec<_> = probs
         .data()
         .iter()
