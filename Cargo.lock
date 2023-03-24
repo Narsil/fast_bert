@@ -1268,7 +1268,7 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 [[package]]
 name = "smelte-rs"
 version = "0.1.0"
-source = "git+https://github.com/Narsil/smelte-rs?branch=allow_static_cublas_linking#39b06f18f03626a41aa7038ea7d33a893a64d808"
+source = "git+https://github.com/Narsil/smelte-rs?branch=allow_static_cublas_linking#9c434e4f9d93b9bc0354eab343ea87ce39515252"
 dependencies = [
  "cblas-sys",
  "cudarc",

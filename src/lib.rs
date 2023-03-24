@@ -36,6 +36,9 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn num_attention_heads(&self) -> usize {
+        self.num_attention_heads
+    }
     pub fn id2label(&self) -> Option<&HashMap<String, String>> {
         self.id2label.as_ref()
     }

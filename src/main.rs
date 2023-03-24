@@ -39,6 +39,7 @@ fn leak_buffer(buffer: Mmap) -> &'static [u8] {
 async fn get_model(
     model_id: &str,
     filename: &str,
+    num_heads: usize,
 ) -> Result<BertClassifier<Tensor>, BertError> {
     let max_files = 100;
     let chunk_size = 10_000_000;
@@ -52,7 +53,6 @@ async fn get_model(
     let buffer: &'static [u8] = leak_buffer(buffer);
     let tensors: SafeTensors<'static> = SafeTensors::deserialize(buffer)?;
     let tensors: &'static SafeTensors<'static> = Box::leak(Box::new(tensors));
-    let num_heads = 12;
 
     #[cfg(feature = "gpu")]
     let device = Device::new(0).unwrap();
@@ -110,9 +110,9 @@ async fn start() -> Result<(), BertError> {
     }
     tracing_subscriber::fmt::init();
     let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
-    let model = get_model(&model_id, "model.safetensors").await?;
     let tokenizer = get_tokenizer(&model_id, "tokenizer.json").await?;
     let config = get_config(&model_id, "config.json").await?;
+    let model = get_model(&model_id, "model.safetensors", config.num_attention_heads()).await?;
 
     let state = AppState {
         model,

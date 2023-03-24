@@ -1,9 +1,7 @@
-use memmap2::MmapOptions;
 use safetensors::{
     tensor::{Dtype, SafeTensorError, TensorView},
     SafeTensors,
 };
-use serde::Deserialize;
 use smelte_rs::gpu::f32::{Device, Tensor};
 use smelte_rs::nn::layers::{Embedding, LayerNorm, Linear};
 pub use smelte_rs::nn::models::bert::BertClassifier;
@@ -12,10 +10,7 @@ use smelte_rs::nn::models::bert::{
 };
 use smelte_rs::SmeltError;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::fs::File;
 use thiserror::Error;
-use tokenizers::Tokenizer;
 
 #[derive(Debug, Error)]
 pub enum BertError {
@@ -29,24 +24,6 @@ pub enum BertError {
     ParseIntError(#[from] core::num::ParseIntError),
     #[error("JSON parsing error")]
     JSONError(#[from] serde_json::Error),
-}
-
-#[derive(Clone, Deserialize)]
-pub struct Config {
-    num_attention_heads: usize,
-    id2label: Option<HashMap<String, String>>,
-}
-
-impl Config {
-    pub fn id2label(&self) -> Option<&HashMap<String, String>> {
-        self.id2label.as_ref()
-    }
-}
-
-pub fn get_label(id2label: Option<&HashMap<String, String>>, i: usize) -> Option<String> {
-    let id2label: &HashMap<String, String> = id2label?;
-    let label: String = id2label.get(&format!("{}", i))?.to_string();
-    Some(label)
 }
 
 pub trait FromSafetensors<'a> {
