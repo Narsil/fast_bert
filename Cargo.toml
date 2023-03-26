@@ -25,6 +25,7 @@ serde = { version = "1.0.152", features = ["serde_derive"] }
 tower-http = { version = "0.3.5", features = ["trace"] }
 serde_json = "1.0.91"
 smelte-rs = { git = "https://github.com/Narsil/smelte-rs", branch = "allow_static_cublas_linking" }
+axum-macros = "0.3.7"
 
 [features]
 cpu = ["smelte-rs/intel-mkl"]
