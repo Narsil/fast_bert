@@ -19,7 +19,7 @@ checksum = "b9ccdd8f2a161be9bd5c023df56f1b2a0bd1d83872ae53b71a84a12c9bf6e842"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.9",
+ "syn 2.0.10",
 ]
 
 [[package]]
@@ -86,7 +86,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 2.0.9",
+ "syn 2.0.10",
 ]
 
 [[package]]
@@ -202,7 +202,7 @@ dependencies = [
 [[package]]
 name = "cudarc"
 version = "0.9.2"
-source = "git+https://github.com/Narsil/cudarc.git#36520f0a11f9c3c1d9d7a95679000317f859c91a"
+source = "git+https://github.com/Narsil/cudarc.git#f89d1a0470d48b50c3bde384c81cc4e81a5a1325"
 
 [[package]]
 name = "darling"
@@ -620,9 +620,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.9.2"
+version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1885e79c1fc4b10f0e172c475f458b7f7b93061064d98c3293e98c5ba0c8b399"
+checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
 dependencies = [
  "autocfg",
  "hashbrown",
@@ -802,7 +802,7 @@ checksum = "d9bc2a7d97f9f2f1aa834be06632a0ad705015ad9bdd282b7eda74d5ba5416ab"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.9",
+ "syn 2.0.10",
 ]
 
 [[package]]
@@ -990,9 +990,9 @@ checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.53"
+version = "1.0.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba466839c78239c09faf015484e5cc04860f88242cff4d03eb038f04b4699b73"
+checksum = "e472a104799c74b514a57226160104aa483546de37e839ec50e3c2e41dd87534"
 dependencies = [
  "unicode-ident",
 ]
@@ -1080,9 +1080,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.7.2"
+version = "1.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cce168fea28d3e05f158bda4576cf0c844d5045bc2cc3620fa0292ed5bb5814c"
+checksum = "8b1f693b24f6ac912f4893ef08244d70b6067480d2f1a46e950c9691e6749d1d"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -1225,7 +1225,7 @@ checksum = "e801c1712f48475582b7696ac71e0ca34ebb30e09338425384269d9717c62cad"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.9",
+ "syn 2.0.10",
 ]
 
 [[package]]
@@ -1287,7 +1287,7 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 [[package]]
 name = "smelte-rs"
 version = "0.1.0"
-source = "git+https://github.com/Narsil/smelte-rs?branch=allow_static_cublas_linking#9c434e4f9d93b9bc0354eab343ea87ce39515252"
+source = "git+https://github.com/Narsil/smelte-rs?branch=main#1e4c6fc44d9bb3be5e17e88ab393231527ea0025"
 dependencies = [
  "cblas-sys",
  "cudarc",
@@ -1336,9 +1336,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.9"
+version = "2.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0da4a3c17e109f700685ec577c0f85efd9b19bcf15c913985f14dc1ac01775aa"
+checksum = "5aad1363ed6d37b84299588d62d3a7d95b5a5c2d9aad5c85609fda12afaa1f40"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1381,7 +1381,7 @@ checksum = "f9456a42c5b0d803c8cd86e73dd7cc9edd429499f37a3550d286d5e86720569f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.9",
+ "syn 2.0.10",
 ]
 
 [[package]]

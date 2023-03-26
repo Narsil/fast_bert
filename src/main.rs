@@ -1,5 +1,6 @@
 use axum::{
     extract::State,
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -11,34 +12,31 @@ use fast_bert::{
     BertError, Config,
 };
 use memmap2::{Mmap, MmapOptions};
-use std::sync::{Arc, Mutex};
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 #[cfg(feature = "cpu")]
-use smelte_rs::cpu::f32::{Tensor, Device};
+use smelte_rs::cpu::f32::{Device, Tensor};
 #[cfg(feature = "gpu")]
-use smelte_rs::gpu::f32::{Tensor, Device};
+use smelte_rs::gpu::f32::{Device, Tensor};
 use std::fs::File;
 use std::net::SocketAddr;
-use std::sync::mpsc::{Receiver,Sender};
+use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{instrument, Level};
 
-
 type OutMsg = Vec<Vec<Output>>;
 
-struct InMsg{
+struct InMsg {
     payload: String,
-    tx: tokio::sync::oneshot::Sender<OutMsg>
+    tx: tokio::sync::oneshot::Sender<OutMsg>,
 }
 
 #[derive(Clone)]
 struct AppState {
-    // model: BertClassifier<Tensor>,
-    // config: Config,
-    // tokenizer: Tokenizer,
-    tx: Arc<Mutex<Sender<InMsg>>>
+    tx: Arc<Mutex<SyncSender<InMsg>>>,
 }
 
 fn leak_buffer(buffer: Mmap) -> &'static [u8] {
@@ -68,7 +66,7 @@ async fn get_model(
     #[cfg(feature = "gpu")]
     let device = Device::new(0).unwrap();
     #[cfg(feature = "cpu")]
-    let device = Device{};
+    let device = Device {};
 
     let mut bert = BertClassifier::from_tensors(tensors, &device);
     bert.set_num_heads(num_heads);
@@ -113,7 +111,7 @@ async fn main() -> Result<(), BertError> {
     start().await
 }
 
-fn server_loop(rx: Receiver<InMsg>)-> Result<(), BertError> {
+fn server_loop(rx: Receiver<InMsg>) -> Result<(), BertError> {
     tracing::debug!("Starting server loop");
     let tokenizer = Tokenizer::from_file("tokenizer.json").unwrap();
 
@@ -128,60 +126,60 @@ fn server_loop(rx: Receiver<InMsg>)-> Result<(), BertError> {
     #[cfg(feature = "gpu")]
     let device = Device::new(0).unwrap();
     #[cfg(feature = "cpu")]
-    let device = Device{};
+    let device = Device {};
 
     let mut model = BertClassifier::from_tensors(tensors, &device);
     model.set_num_heads(config.num_attention_heads());
 
     tracing::debug!("Loaded server loop");
-    loop{
-        if let Ok(InMsg{payload, tx}) = rx.recv() {
-        tracing::debug!("Recived {payload:?}");
-        let payload: Inputs = if let Ok(payload) = serde_json::from_str(&payload) {
-            payload
-        } else {
-            Inputs {
-                inputs: payload,
-                ..Default::default()
+    loop {
+        if let Ok(InMsg { payload, tx }) = rx.recv() {
+            tracing::debug!("Recived {payload:?}");
+            let payload: Inputs = if let Ok(payload) = serde_json::from_str(&payload) {
+                payload
+            } else {
+                Inputs {
+                    inputs: payload,
+                    ..Default::default()
+                }
+            };
+            let encoded = tokenizer.encode(payload.inputs, false).unwrap();
+            let encoded = tokenizer.post_process(encoded, None, true).unwrap();
+            let input_ids: Vec<_> = encoded.get_ids().iter().map(|i| *i as usize).collect();
+            let position_ids: Vec<_> = (0..input_ids.len()).collect();
+            let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
+            let probs = model.run(input_ids, position_ids, type_ids).unwrap();
+            let id2label = config.id2label();
+            #[cfg(feature = "gpu")]
+            let mut outputs: Vec<_> = probs
+                .cpu_data()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| Output {
+                    label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
+                    score: p,
+                })
+                .collect();
+            #[cfg(feature = "cpu")]
+            let mut outputs: Vec<_> = probs
+                .data()
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| Output {
+                    label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
+                    score: p,
+                })
+                .collect();
+            outputs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+            if let Some(top_k) = payload.parameters.top_k {
+                outputs = outputs.into_iter().take(top_k).collect()
             }
-        };
-    let encoded = tokenizer.encode(payload.inputs, false).unwrap();
-    let encoded = tokenizer.post_process(encoded, None, true).unwrap();
-    let input_ids: Vec<_> = encoded.get_ids().iter().map(|i| *i as usize).collect();
-    let position_ids: Vec<_> = (0..input_ids.len()).collect();
-    let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
-    let probs = model.run(input_ids, position_ids, type_ids).unwrap();
-    let id2label = config.id2label();
-    #[cfg(feature="gpu")]
-    let mut outputs: Vec<_> = probs
-        .cpu_data().unwrap()
-        .iter()
-        .enumerate()
-        .map(|(i, &p)| Output {
-            label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
-            score: p,
-        })
-        .collect();
-    #[cfg(feature="cpu")]
-    let mut outputs: Vec<_> = probs
-        .data()
-        .iter()
-        .enumerate()
-        .map(|(i, &p)| Output {
-            label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
-            score: p,
-        })
-        .collect();
-    outputs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-    if let Some(top_k) = payload.parameters.top_k {
-        outputs = outputs.into_iter().take(top_k).collect()
+            if let Err(_err) = tx.send(vec![outputs]) {
+                println!("The receiver dropped");
+            }
+        }
     }
-    if let Err(_err) = tx.send(vec![outputs]){
-        println!("The receiver dropped");
-    }
-}
-}
-
 }
 async fn start() -> Result<(), BertError> {
     // initialize tracing
@@ -189,20 +187,21 @@ async fn start() -> Result<(), BertError> {
         std::env::set_var("RUST_LOG", "fast_bert=debug,tower_http=debug")
     }
     tracing_subscriber::fmt::init();
+    let queue_size = 2;
 
     let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
     get_tokenizer(&model_id, "tokenizer.json").await?;
     let config = get_config(&model_id, "config.json").await?;
     get_model(&model_id, "model.safetensors", config.num_attention_heads()).await?;
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::sync_channel(queue_size);
 
-    tokio::task::spawn_blocking(move ||{
+    tokio::task::spawn_blocking(move || {
         server_loop(rx).unwrap();
     });
 
     let state = AppState {
-        tx: Arc::new(Mutex::new(tx))
+        tx: Arc::new(Mutex::new(tx)),
     };
 
     // build our application with a route
@@ -258,15 +257,18 @@ async fn health() -> impl IntoResponse {
 }
 
 #[axum_macros::debug_handler]
-async fn inference(State(state): State<AppState>, payload: String) -> impl IntoResponse{
+async fn inference(State(state): State<AppState>, payload: String) -> impl IntoResponse {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let msg = InMsg{
-        payload,
-        tx
-    };
+    let msg = InMsg { payload, tx };
     {
-    let stx = state.tx.lock().unwrap();
-    (*stx).send(msg).unwrap();
+        let stx = state.tx.lock().unwrap();
+        if let Err(_) = (*stx).try_send(msg) {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "Queue is full"})),
+            )
+                .into_response();
+        }
     }
-    Json(rx.await.unwrap())
+    Json(rx.await.unwrap()).into_response()
 }
