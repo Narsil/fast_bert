@@ -113,11 +113,17 @@ async fn main() -> Result<(), BertError> {
 
 fn server_loop(rx: Receiver<InMsg>) -> Result<(), BertError> {
     tracing::debug!("Starting server loop");
-    let tokenizer = Tokenizer::from_file("tokenizer.json").unwrap();
+    let tokenizer = Tokenizer::from_file("models/tokenizer.json").unwrap();
 
-    let config_str = std::fs::read_to_string("config.json").unwrap();
+    tracing::debug!("Working directory {:?}", std::env::current_dir());
+    tracing::debug!("{:?}", std::env::current_dir());
+    if !std::path::Path::new("models/config.json").exists() {
+        panic!("Bad mount");
+    }
+
+    let config_str = std::fs::read_to_string("models/config.json").unwrap();
     let config: Config = serde_json::from_str(&config_str).unwrap();
-    let file = File::open("model.safetensors").unwrap();
+    let file = File::open("models/model.safetensors").unwrap();
     let buffer = unsafe { MmapOptions::new().map(&file)? };
     let buffer: &'static [u8] = leak_buffer(buffer);
     let tensors: SafeTensors<'static> = SafeTensors::deserialize(buffer)?;
@@ -190,9 +196,14 @@ async fn start() -> Result<(), BertError> {
     let queue_size = 2;
 
     let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
-    get_tokenizer(&model_id, "tokenizer.json").await?;
-    let config = get_config(&model_id, "config.json").await?;
-    get_model(&model_id, "model.safetensors", config.num_attention_heads()).await?;
+    get_tokenizer(&model_id, "models/tokenizer.json").await?;
+    let config = get_config(&model_id, "models/config.json").await?;
+    get_model(
+        &model_id,
+        "models/model.safetensors",
+        config.num_attention_heads(),
+    )
+    .await?;
 
     let (tx, rx) = std::sync::mpsc::sync_channel(queue_size);
 

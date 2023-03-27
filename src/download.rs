@@ -20,7 +20,6 @@ pub async fn download(
         .send()
         .await?;
 
-    println!("Got headers {:?}", response.headers());
     let content_range = response
         .headers()
         .get(CONTENT_RANGE)

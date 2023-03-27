@@ -1,0 +1,61 @@
+FROM nvidia/cuda:12.1.0-devel-ubuntu22.04 as build
+# FROM rust:1.68 as build
+# 
+ENV DISTRO=debian11
+ENV ARCH=x86_64
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update
+RUN apt-get install -y curl pkg-config libssl-dev
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="${PATH}:/root/.cargo/bin/"
+RUN apt-get install -y pkg-config libssl-dev
+
+# RUN apt-get update && apt-get install software-properties-common -y && add-apt-repository contrib
+# RUN wget https://developer.download.nvidia.com/compute/cuda/repos/$DISTRO/$ARCH/cuda-keyring_1.0-1_all.deb
+# RUN dpkg -i cuda-keyring_1.0-1_all.deb
+# RUN apt-get update && apt-get install -y cuda
+# RUN apt-get install -y cuda-toolkit
+# ENV PATH="${PATH}:/usr/local/cuda-12.1/bin/"
+ 
+SHELL ["/bin/bash", "-c"]
+ENV STATIC=1
+
+WORKDIR /usr/src/fast_bert
+COPY docker/dummy.rs .
+COPY Cargo.toml .
+COPY Cargo.lock .
+RUN sed -i 's#src/main.rs#dummy.rs#' Cargo.toml
+RUN cargo build --release --features gpu
+RUN sed -i 's#dummy.rs#src/main.rs#' Cargo.toml
+COPY src/ src/
+# COPY . . 
+
+
+RUN cargo build --release --features gpu
+# ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/cuda-12.0/compat/"
+# ENV MODEL_ID=Narsil/finbert
+
+# RUN ls -l -h /usr/local/cuda-12.1/compat/libcuda.so.1 && xx
+
+FROM ubuntu:22.04
+
+COPY --from=build /usr/src/fast_bert/target/release/fast_bert /usr/local/bin/fast_bert
+# RUN apt-get update && apt-get install  libnvidia-compute-525 --no-install-recommends
+COPY --from=build \
+    # # /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+    # /lib/x86_64-linux-gnu/libssl.so.3 \
+    # /lib/x86_64-linux-gnu/libcrypto.so.3 \
+    # /lib/x86_64-linux-gnu/libc.so.6 \
+    # /lib/x86_64-linux-gnu/libm.so.6 \
+    # /lib/x86_64-linux-gnu/libstdc++.so.6 \
+    # /usr/local/cuda-12.1/compat/libcuda.so \
+    # /usr/local/cuda-12.1/compat/libcuda.so.1 \
+    /usr/local/cuda-12.1/compat/libcuda.so.530.30.02 \
+	/usr/lib/x86_64-linux-gnu/
+ENV PORT=80
+# COPY tokenizer.json .
+# COPY model.safetensors .
+CMD ["fast_bert"]
+
+

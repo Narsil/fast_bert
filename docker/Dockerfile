@@ -1,4 +1,4 @@
-FROM rust:1.66 as build
+FROM rust:1.68 as build
 
 RUN cd /tmp && \
     wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
@@ -16,15 +16,14 @@ COPY docker/dummy.rs .
 COPY Cargo.toml .
 COPY Cargo.lock .
 RUN sed -i 's#src/main.rs#dummy.rs#' Cargo.toml
-RUN source /opt/intel/oneapi/setvars.sh && cargo build --release --features intel-mkl
+RUN source /opt/intel/oneapi/setvars.sh && cargo build --release --features cpu
 RUN sed -i 's#dummy.rs#src/main.rs#' Cargo.toml
 RUN apt install -y libatlas-base-dev
 COPY src/ src/
-COPY . . 
 
-RUN source /opt/intel/oneapi/setvars.sh && cargo build --release --features intel-mkl
+RUN source /opt/intel/oneapi/setvars.sh && cargo build --release --features cpu
 
-FROM gcr.io/distroless/cc-debian10
+FROM gcr.io/distroless/cc-debian11
 
 COPY --from=build /usr/src/fast_bert/target/release/fast_bert /usr/local/bin/fast_bert
 COPY --from=build /opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin/libiomp5.so /usr/lib/
