@@ -33,29 +33,16 @@ COPY src/ src/
 
 
 RUN cargo build --release --features gpu
-# ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/cuda-12.0/compat/"
-# ENV MODEL_ID=Narsil/finbert
-
-# RUN ls -l -h /usr/local/cuda-12.1/compat/libcuda.so.1 && xx
 
 FROM ubuntu:22.04
 
 COPY --from=build /usr/src/fast_bert/target/release/fast_bert /usr/local/bin/fast_bert
-# RUN apt-get update && apt-get install  libnvidia-compute-525 --no-install-recommends
 COPY --from=build \
-    # # /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
-    # /lib/x86_64-linux-gnu/libssl.so.3 \
-    # /lib/x86_64-linux-gnu/libcrypto.so.3 \
-    # /lib/x86_64-linux-gnu/libc.so.6 \
-    # /lib/x86_64-linux-gnu/libm.so.6 \
-    # /lib/x86_64-linux-gnu/libstdc++.so.6 \
-    # /usr/local/cuda-12.1/compat/libcuda.so \
-    # /usr/local/cuda-12.1/compat/libcuda.so.1 \
     /usr/local/cuda-12.1/compat/libcuda.so.530.30.02 \
 	/usr/lib/x86_64-linux-gnu/
+RUN ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.530.30.02 /usr/lib/x86_64-linux-gnu/libcuda.so.1
+RUN ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.530.30.02 /usr/lib/x86_64-linux-gnu/libcuda.so
 ENV PORT=80
 # COPY tokenizer.json .
 # COPY model.safetensors .
 CMD ["fast_bert"]
-
-

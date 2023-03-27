@@ -116,10 +116,6 @@ fn server_loop(rx: Receiver<InMsg>) -> Result<(), BertError> {
     let tokenizer = Tokenizer::from_file("models/tokenizer.json").unwrap();
 
     tracing::debug!("Working directory {:?}", std::env::current_dir());
-    tracing::debug!("{:?}", std::env::current_dir());
-    if !std::path::Path::new("models/config.json").exists() {
-        panic!("Bad mount");
-    }
 
     let config_str = std::fs::read_to_string("models/config.json").unwrap();
     let config: Config = serde_json::from_str(&config_str).unwrap();
