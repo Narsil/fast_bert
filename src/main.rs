@@ -115,8 +115,6 @@ fn server_loop(rx: Receiver<InMsg>) -> Result<(), BertError> {
     tracing::debug!("Starting server loop");
     let tokenizer = Tokenizer::from_file("models/tokenizer.json").unwrap();
 
-    tracing::debug!("Working directory {:?}", std::env::current_dir());
-
     let config_str = std::fs::read_to_string("models/config.json").unwrap();
     let config: Config = serde_json::from_str(&config_str).unwrap();
     let file = File::open("models/model.safetensors").unwrap();
