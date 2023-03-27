@@ -45,4 +45,5 @@ RUN ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.530.30.02 /usr/lib/x86_64-linux-g
 ENV PORT=80
 # COPY tokenizer.json .
 # COPY model.safetensors .
+RUN mkdir /models/
 CMD ["fast_bert"]
