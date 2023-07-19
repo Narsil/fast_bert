@@ -12,11 +12,9 @@ path = "src/main.rs"
 [dependencies]
 futures = "0.3.25"
 futures-util = "0.3.25"
-memmap2 = "0.5"
-reqwest = { version = "0.11", features = ["stream"] }
 safetensors = "0.3"
 thiserror = "1.0"
-tokenizers = { git = "https://github.com/huggingface/tokenizers", branch="main", default-features=false, features=["onig"] }
+tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 tokio = { version = "1.23.0", features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = "0.3.16"
 axum = "0.6.3"
@@ -24,14 +22,12 @@ tracing = "0.1.37"
 serde = { version = "1.0.152", features = ["serde_derive"] }
 tower-http = { version = "0.3.5", features = ["trace"] }
 serde_json = "1.0.91"
-smelte-rs = { git = "https://github.com/Narsil/smelte-rs", branch = "main"}
+candle = { git = "https://github.com/LaurentMazare/candle", branch = "remove_wrapper" }
+candle-nn = { git = "https://github.com/LaurentMazare/candle", branch = "remove_wrapper" }
+hf-hub = { git = "https://github.com/huggingface/hf-hub", features = ["tokio"] }
 axum-macros = "0.3.7"
-
-[features]
-cpu = ["smelte-rs/intel-mkl"]
-gpu = ["smelte-rs/cuda"]
 
 [profile.release]
 strip = true
-lto = true
+lto = "fat"
 codegen-units = 1

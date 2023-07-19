@@ -5,27 +5,24 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use fast_bert::{
-    download::download,
-    get_label,
-    model::{BertClassifier, FromSafetensors},
-    BertError, Config,
-};
-use memmap2::{Mmap, MmapOptions};
+
+mod model;
+use model::{BertModel, Config};
+use std::collections::HashMap;
+use hf_hub::{api::tokio::Api, Repo, RepoType};
+use candle::{DType, Device, Tensor, IndexOp};
+use candle_nn::VarBuilder;
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-#[cfg(feature = "cpu")]
-use smelte_rs::cpu::f32::{Device, Tensor};
-#[cfg(feature = "gpu")]
-use smelte_rs::gpu::f32::{Device, Tensor};
-use std::fs::File;
 use std::net::SocketAddr;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{instrument, Level};
+use hf_hub::api::tokio::ApiError;
+use safetensors::tensor::SafeTensorError;
 
 type OutMsg = Vec<Vec<Output>>;
 
@@ -39,99 +36,36 @@ struct AppState {
     tx: Arc<Mutex<SyncSender<InMsg>>>,
 }
 
-fn leak_buffer(buffer: Mmap) -> &'static [u8] {
-    let buffer: &'static mut Mmap = Box::leak(Box::new(buffer));
-    buffer
+pub fn get_label(id2label: Option<&HashMap<String, String>>, i: usize) -> Option<String> {
+    let id2label: &HashMap<String, String> = id2label?;
+    let label: String = id2label.get(&format!("{}", i))?.to_string();
+    Some(label)
 }
 
-#[instrument]
-async fn get_model(
-    model_id: &str,
-    filename: &str,
-    num_heads: usize,
-) -> Result<BertClassifier<Tensor>, BertError> {
-    let max_files = 100;
-    let chunk_size = 10_000_000;
-    if !std::path::Path::new(filename).exists() {
-        let url = format!("https://huggingface.co/{model_id}/resolve/main/model.safetensors");
-        println!("Downloading {url:?} into {filename:?}");
-        download(&url, filename, max_files, chunk_size).await?;
-    }
-    let file = File::open(filename)?;
-    let buffer = unsafe { MmapOptions::new().map(&file)? };
-    let buffer: &'static [u8] = leak_buffer(buffer);
-    let tensors: SafeTensors<'static> = SafeTensors::deserialize(buffer)?;
-    let tensors: &'static SafeTensors<'static> = Box::leak(Box::new(tensors));
-
-    #[cfg(feature = "gpu")]
-    let device = Device::new(0).unwrap();
-    #[cfg(feature = "cpu")]
-    let device = Device {};
-
-    let mut bert = BertClassifier::from_tensors(tensors, &device);
-    bert.set_num_heads(num_heads);
-    Ok(bert)
+#[derive(Debug, thiserror::Error)]
+pub enum BertError {
+    #[error("i/o error")]
+    IOError(#[from] std::io::Error),
+    #[error("safetensor error")]
+    SafeTensorError(#[from] SafeTensorError),
+    #[error("slice error")]
+    Slice(#[from] std::array::TryFromSliceError),
+    #[error("parsing int error")]
+    ParseIntError(#[from] core::num::ParseIntError),
+    #[error("Hub api error")]
+    RequestError(#[from] ApiError),
+    #[error("JSON parsing error")]
+    JSONError(#[from] serde_json::Error),
 }
 
-#[instrument]
-async fn get_config(model_id: &str, filename: &str) -> Result<Config, BertError> {
-    let max_files = 100;
-    let chunk_size = 10_000_000;
-    if !std::path::Path::new(filename).exists() {
-        let url = format!("https://huggingface.co/{model_id}/resolve/main/config.json");
-        println!("Downloading {url:?} into {filename:?}");
-        download(&url, filename, max_files, chunk_size).await?;
-    }
-    let config_str: String = std::fs::read_to_string(filename).expect("Could not read config");
-    let config: Config = serde_json::from_str(&config_str)?;
-    Ok(config)
-}
 
-#[instrument]
-async fn get_tokenizer(model_id: &str, filename: &str) -> Result<Tokenizer, BertError> {
-    let max_files = 100;
-    let chunk_size = 10_000_000;
-    if !std::path::Path::new(filename).exists() {
-        let url = format!("https://huggingface.co/{model_id}/resolve/main/tokenizer.json");
-        println!("Downloading {url:?} into {filename:?}");
-        download(&url, filename, max_files, chunk_size).await?;
-    }
-    Ok(Tokenizer::from_file(filename).unwrap())
-}
-
-#[cfg(feature = "gpu")]
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), BertError> {
-    start().await
-}
-
-#[cfg(feature = "cpu")]
 #[tokio::main]
 async fn main() -> Result<(), BertError> {
     start().await
 }
 
-fn server_loop(rx: Receiver<InMsg>) -> Result<(), BertError> {
+fn server_loop(config: Config, tokenizer: Tokenizer, model: BertModel, rx: Receiver<InMsg>) -> Result<(), BertError> {
     tracing::debug!("Starting server loop");
-    let tokenizer = Tokenizer::from_file("models/tokenizer.json").unwrap();
-
-    let config_str = std::fs::read_to_string("models/config.json").unwrap();
-    let config: Config = serde_json::from_str(&config_str).unwrap();
-    let file = File::open("models/model.safetensors").unwrap();
-    let buffer = unsafe { MmapOptions::new().map(&file)? };
-    let buffer: &'static [u8] = leak_buffer(buffer);
-    let tensors: SafeTensors<'static> = SafeTensors::deserialize(buffer)?;
-    let tensors: &'static SafeTensors<'static> = Box::leak(Box::new(tensors));
-
-    #[cfg(feature = "gpu")]
-    let device = Device::new(0).unwrap();
-    #[cfg(feature = "cpu")]
-    let device = Device {};
-
-    let mut model = BertClassifier::from_tensors(tensors, &device);
-    model.set_num_heads(config.num_attention_heads());
-
-    tracing::debug!("Loaded server loop");
     loop {
         if let Ok(InMsg { payload, tx }) = rx.recv() {
             tracing::debug!("Recived {payload:?}");
@@ -145,25 +79,14 @@ fn server_loop(rx: Receiver<InMsg>) -> Result<(), BertError> {
             };
             let encoded = tokenizer.encode(payload.inputs, false).unwrap();
             let encoded = tokenizer.post_process(encoded, None, true).unwrap();
-            let input_ids: Vec<_> = encoded.get_ids().iter().map(|i| *i as usize).collect();
-            let position_ids: Vec<_> = (0..input_ids.len()).collect();
-            let type_ids: Vec<_> = encoded.get_type_ids().iter().map(|i| *i as usize).collect();
-            let probs = model.run(input_ids, position_ids, type_ids).unwrap();
+
+            let device = Device::Cpu;
+            let input_ids = Tensor::new(encoded.get_ids(), &device).unwrap().unsqueeze(0).unwrap();
+            let type_ids = Tensor::new(encoded.get_type_ids(), &device).unwrap().unsqueeze(0).unwrap();
+            let probs = model.forward(&input_ids, &type_ids).unwrap();
             let id2label = config.id2label();
-            #[cfg(feature = "gpu")]
-            let mut outputs: Vec<_> = probs
-                .cpu_data()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .map(|(i, &p)| Output {
-                    label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
-                    score: p,
-                })
-                .collect();
-            #[cfg(feature = "cpu")]
-            let mut outputs: Vec<_> = probs
-                .data()
+            let mut outputs: Vec<_> = probs.i(0).unwrap()
+                .to_vec1::<f32>().unwrap()
                 .iter()
                 .enumerate()
                 .map(|(i, &p)| Output {
@@ -190,19 +113,25 @@ async fn start() -> Result<(), BertError> {
     let queue_size = 2;
 
     let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
-    get_tokenizer(&model_id, "models/tokenizer.json").await?;
-    let config = get_config(&model_id, "models/config.json").await?;
-    get_model(
-        &model_id,
-        "models/model.safetensors",
-        config.num_attention_heads(),
-    )
-    .await?;
+    let api = Api::new().unwrap();
+    let repo = Repo::new(model_id, RepoType::Model);
+    let tokenizer = Tokenizer::from_file(api.get(&repo, "tokenizer.json").await?).unwrap();
+
+    let config = api.get(&repo, "config.json").await?;
+    let config: String = std::fs::read_to_string(config).expect("Could not read config");
+    let config: Config = serde_json::from_str(&config)?;
+
+    let model = api.get(&repo, "model.safetensors").await?;
+    let buffer = std::fs::read(model)?;
+    let tensors: SafeTensors<'_> = SafeTensors::deserialize(&buffer)?;
+    let device = Device::Cpu;
+    let vb = VarBuilder::from_safetensors(vec![tensors], DType::F32, &device);
+    let model = BertModel::load(vb, &config).unwrap();
 
     let (tx, rx) = std::sync::mpsc::sync_channel(queue_size);
 
     tokio::task::spawn_blocking(move || {
-        server_loop(rx).unwrap();
+        server_loop(config, tokenizer, model, rx).unwrap();
     });
 
     let state = AppState {
