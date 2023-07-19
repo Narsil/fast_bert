@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{StatusCode, HeaderMap, HeaderName, header::ACCESS_CONTROL_EXPOSE_HEADERS},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -192,6 +192,7 @@ async fn health() -> impl IntoResponse {
 
 #[axum_macros::debug_handler]
 async fn inference(State(state): State<AppState>, payload: String) -> impl IntoResponse {
+    let start = std::time::Instant::now();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let msg = InMsg { payload, tx };
     {
@@ -204,5 +205,13 @@ async fn inference(State(state): State<AppState>, payload: String) -> impl IntoR
                 .into_response();
         }
     }
-    Json(rx.await.unwrap()).into_response()
+    let receive = rx.await.unwrap();
+    let time = start.elapsed().as_secs_f32().to_string();
+    let mut headers = HeaderMap::new();
+    let header_time = HeaderName::from_static("x-compute-time");
+    let header_type = HeaderName::from_static("x-compute-type");
+    headers.insert(header_time.clone(), time.parse().unwrap());
+    headers.insert(header_type.clone(), "cpu".parse().unwrap());
+    headers.insert(ACCESS_CONTROL_EXPOSE_HEADERS, format!("{header_time}, {header_type}").parse().unwrap());
+    (headers, Json(receive)).into_response()
 }

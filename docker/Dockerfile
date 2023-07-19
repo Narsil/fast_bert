@@ -7,11 +7,11 @@ COPY docker/dummy.rs .
 COPY Cargo.toml .
 COPY Cargo.lock .
 RUN sed -i 's#src/main.rs#dummy.rs#' Cargo.toml
-RUN cargo build --release
+RUN RUSTFLAGS="-C target-feature=+avx2" cargo build --release
 RUN sed -i 's#dummy.rs#src/main.rs#' Cargo.toml
 COPY src/ src/
 
-RUN cargo build --release
+RUN RUSTFLAGS="-C target-feature=+avx2" cargo build --release
 
 FROM gcr.io/distroless/cc-debian11
 
