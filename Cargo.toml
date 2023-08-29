@@ -16,7 +16,7 @@ safetensors = "0.3"
 thiserror = "1.0"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 tokio = { version = "1.23.0", features = ["rt-multi-thread", "macros"] }
-tracing-subscriber = "0.3.16"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
 axum = "0.6.3"
 tracing = "0.1.37"
 serde = { version = "1.0.152", features = ["serde_derive"] }
@@ -26,6 +26,7 @@ candle = { version = "0.1.2", package = "candle-core" }
 candle-nn = { version = "0.1.2" }
 hf-hub = { version = "0.3.0", features = ["tokio"] }
 axum-macros = "0.3.7"
+tracing-chrome = "0.7.1"
 
 [profile.release]
 strip = true
