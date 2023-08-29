@@ -26,7 +26,6 @@ candle = { version = "0.1.2", package = "candle-core" }
 candle-nn = { version = "0.1.2" }
 hf-hub = { version = "0.3.0", features = ["tokio"] }
 axum-macros = "0.3.7"
-tracing-chrome = "0.7.1"
 
 [profile.release]
 strip = true

@@ -589,7 +589,6 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
- "tracing-chrome",
  "tracing-subscriber",
 ]
 
@@ -2070,17 +2069,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.26",
-]
-
-[[package]]
-name = "tracing-chrome"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "496b3cd5447f7ff527bbbf19b071ad542a000adf297d4127078b4dfdb931f41a"
-dependencies = [
- "serde_json",
- "tracing-core",
- "tracing-subscriber",
 ]
 
 [[package]]

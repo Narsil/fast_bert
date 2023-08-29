@@ -27,8 +27,6 @@ use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{instrument, Level};
-use tracing_chrome::ChromeLayerBuilder;
-use tracing_subscriber::{prelude::*, registry::Registry};
 
 type OutMsg = Vec<u8>;
 
@@ -112,8 +110,7 @@ async fn start() -> Result<(), BertError> {
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "fast_bert=debug,tower_http=debug")
     }
-    let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
-    tracing_subscriber::registry().with(chrome_layer).init();
+    tracing_subscriber::fmt::init();
     let queue_size = 2;
 
     let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
