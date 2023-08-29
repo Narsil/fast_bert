@@ -1,4 +1,4 @@
-use candle::{DType, Device, Result, Tensor, IndexOp, D};
+use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -127,17 +127,17 @@ pub struct Config {
     use_cache: bool,
     classifier_dropout: Option<f64>,
     model_type: Option<String>,
-    id2label: Option<HashMap<String, String>>
+    id2label: Option<HashMap<String, String>>,
 }
-impl Config{
+impl Config {
     pub fn id2label(&self) -> Option<&HashMap<String, String>> {
         self.id2label.as_ref()
     }
 
-    pub fn num_labels(&self) -> usize{
-        if let Some(id2label) = &self.id2label{
+    pub fn num_labels(&self) -> usize {
+        if let Some(id2label) = &self.id2label {
             id2label.len()
-        }else{
+        } else {
             2
         }
     }
@@ -489,16 +489,23 @@ impl BertEncoder {
 
 pub struct BertClassifier {
     pooler: Linear,
-    classifier: Linear,
     span: tracing::Span,
 }
 
 impl BertClassifier {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "classifier");
-        let classifier = linear(config.hidden_size, config.num_labels(), vb.pp("classifier"))?;
-        let pooler = linear(config.hidden_size, config.hidden_size, vb.pp("bert.pooler.dense"))?;
-        Ok(BertClassifier { classifier, span, pooler })
+        let span = tracing::span!(tracing::Level::TRACE, "pooler");
+        let pooler = linear(
+            config.hidden_size,
+            config.hidden_size,
+            vb.pp("bert.pooler.dense"),
+        )
+        .unwrap_or(linear(
+            config.hidden_size,
+            config.hidden_size,
+            vb.pp("pooler.dense"),
+        )?);
+        Ok(BertClassifier { span, pooler })
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
@@ -508,8 +515,9 @@ impl BertClassifier {
         // let hidden_states = hidden_states.tanh()?;
         let two = Tensor::new(&[2.0f32], hidden_states.device())?;
         let one = Tensor::new(&[1.0f32], hidden_states.device())?;
-        let hidden_states = one.broadcast_sub(&(&two.broadcast_div(&((&hidden_states * 2.0f64)?.exp()? + 1.0f64)?)?))?;
-        let hidden_states = self.classifier.forward(&hidden_states)?;
+        let hidden_states = one.broadcast_sub(
+            &(&two.broadcast_div(&((&hidden_states * 2.0f64)?.exp()? + 1.0f64)?)?),
+        )?;
         Ok(hidden_states)
     }
 }
@@ -559,8 +567,10 @@ impl BertModel {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
         let sequence_output = self.encoder.forward(&embedding_output)?;
-        let classes = self.classifier.forward(&sequence_output)?;
-        let first = classes.softmax(D::Minus1)?;
-        Ok(first)
+        let outputs = self.classifier.forward(&sequence_output)?;
+        // TODO suppot more pooling
+        let embedding = outputs.i(0)?;
+        // let first = classes.softmax(D::Minus1)?;
+        Ok(embedding)
     }
 }

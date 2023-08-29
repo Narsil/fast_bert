@@ -1,30 +1,34 @@
 use axum::{
     extract::State,
-    http::{StatusCode, HeaderMap, HeaderName, header::ACCESS_CONTROL_EXPOSE_HEADERS},
+    http::{
+        header::{ACCESS_CONTROL_EXPOSE_HEADERS, CONTENT_TYPE},
+        HeaderMap, HeaderName, StatusCode,
+    },
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 
 mod model;
-use model::{BertModel, Config};
-use std::collections::HashMap;
-use hf_hub::{api::tokio::Api, Repo, RepoType};
-use candle::{DType, Device, Tensor, IndexOp};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
+use hf_hub::api::tokio::ApiError;
+use hf_hub::{api::tokio::Api, Repo, RepoType};
+use model::{BertModel, Config};
+use safetensors::serialize;
+use safetensors::tensor::SafeTensorError;
 use safetensors::tensor::SafeTensors;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{instrument, Level};
-use hf_hub::api::tokio::ApiError;
-use safetensors::tensor::SafeTensorError;
 
-type OutMsg = Vec<Vec<Output>>;
+type OutMsg = Vec<u8>;
 
 struct InMsg {
     payload: String,
@@ -58,13 +62,17 @@ pub enum BertError {
     JSONError(#[from] serde_json::Error),
 }
 
-
 #[tokio::main]
 async fn main() -> Result<(), BertError> {
     start().await
 }
 
-fn server_loop(config: Config, tokenizer: Tokenizer, model: BertModel, rx: Receiver<InMsg>) -> Result<(), BertError> {
+fn server_loop(
+    config: Config,
+    tokenizer: Tokenizer,
+    model: BertModel,
+    rx: Receiver<InMsg>,
+) -> Result<(), BertError> {
     tracing::debug!("Starting server loop");
     loop {
         if let Ok(InMsg { payload, tx }) = rx.recv() {
@@ -81,24 +89,17 @@ fn server_loop(config: Config, tokenizer: Tokenizer, model: BertModel, rx: Recei
             let encoded = tokenizer.post_process(encoded, None, true).unwrap();
 
             let device = Device::Cpu;
-            let input_ids = Tensor::new(encoded.get_ids(), &device).unwrap().unsqueeze(0).unwrap();
-            let type_ids = Tensor::new(encoded.get_type_ids(), &device).unwrap().unsqueeze(0).unwrap();
-            let probs = model.forward(&input_ids, &type_ids).unwrap();
-            let id2label = config.id2label();
-            let mut outputs: Vec<_> = probs.i(0).unwrap()
-                .to_vec1::<f32>().unwrap()
-                .iter()
-                .enumerate()
-                .map(|(i, &p)| Output {
-                    label: get_label(id2label, i).unwrap_or(format!("LABEL_{}", i)),
-                    score: p,
-                })
-                .collect();
-            outputs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-            if let Some(top_k) = payload.parameters.top_k {
-                outputs = outputs.into_iter().take(top_k).collect()
-            }
-            if let Err(_err) = tx.send(vec![outputs]) {
+            let input_ids = Tensor::new(encoded.get_ids(), &device)
+                .unwrap()
+                .unsqueeze(0)
+                .unwrap();
+            let type_ids = Tensor::new(encoded.get_type_ids(), &device)
+                .unwrap()
+                .unsqueeze(0)
+                .unwrap();
+            let embedding = model.forward(&input_ids, &type_ids).unwrap();
+            let safetensor_repr = serialize(HashMap::from([("embedding", embedding)]), &None)?;
+            if let Err(_err) = tx.send(safetensor_repr) {
                 println!("The receiver dropped");
             }
         }
@@ -210,8 +211,12 @@ async fn inference(State(state): State<AppState>, payload: String) -> impl IntoR
     let mut headers = HeaderMap::new();
     let header_time = HeaderName::from_static("x-compute-time");
     let header_type = HeaderName::from_static("x-compute-type");
+    headers.insert(CONTENT_TYPE, "application/safetensors".parse().unwrap());
     headers.insert(header_time.clone(), time.parse().unwrap());
     headers.insert(header_type.clone(), "cpu".parse().unwrap());
-    headers.insert(ACCESS_CONTROL_EXPOSE_HEADERS, format!("{header_time}, {header_type}").parse().unwrap());
-    (headers, Json(receive)).into_response()
+    headers.insert(
+        ACCESS_CONTROL_EXPOSE_HEADERS,
+        format!("{header_time}, {header_type}").parse().unwrap(),
+    );
+    (headers, receive).into_response()
 }
