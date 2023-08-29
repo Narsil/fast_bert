@@ -115,14 +115,14 @@ async fn start() -> Result<(), BertError> {
 
     let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
     let api = Api::new().unwrap();
-    let repo = Repo::new(model_id, RepoType::Model);
-    let tokenizer = Tokenizer::from_file(api.get(&repo, "tokenizer.json").await?).unwrap();
+    let api = api.model(model_id);
+    let tokenizer = Tokenizer::from_file(api.get("tokenizer.json").await?).unwrap();
 
-    let config = api.get(&repo, "config.json").await?;
+    let config = api.get("config.json").await?;
     let config: String = std::fs::read_to_string(config).expect("Could not read config");
     let config: Config = serde_json::from_str(&config)?;
 
-    let model = api.get(&repo, "model.safetensors").await?;
+    let model = api.get("model.safetensors").await?;
     let buffer = std::fs::read(model)?;
     let tensors: SafeTensors<'_> = SafeTensors::deserialize(&buffer)?;
     let device = Device::Cpu;
