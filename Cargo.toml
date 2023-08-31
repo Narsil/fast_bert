@@ -17,17 +17,25 @@ thiserror = "1.0"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 tokio = { version = "1.23.0", features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
-axum = "0.6.3"
+axum = "0.6.20"
 tracing = "0.1.37"
 serde = { version = "1.0.152", features = ["serde_derive"] }
-tower-http = { version = "0.3.5", features = ["trace"] }
+tower-http = { version = "0.4.3", features = ["trace"] }
 serde_json = "1.0.91"
 candle = { version = "0.1.2", package = "candle-core" }
 candle-nn = { version = "0.1.2" }
 hf-hub = { version = "0.3.0", features = ["tokio"] }
 axum-macros = "0.3.7"
+tracing-opentelemetry = "0.21.0"
+opentelemetry-otlp = "0.13.0"
+opentelemetry = { version = "0.20.0", features = ["rt-tokio"] }
+axum-tracing-opentelemetry = "0.13.1"
+http = "0.2.9"
+hyper = "0.14.27"
+init-tracing-opentelemetry = { version = "0.13.1" }
 
-[profile.release]
+[profile.release-fat]
+inherits = "release"
 strip = true
 lto = "fat"
 codegen-units = 1

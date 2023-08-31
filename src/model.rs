@@ -1,4 +1,4 @@
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{ops::softmax, Embedding, Module, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -130,17 +130,17 @@ pub struct Config {
     id2label: Option<HashMap<String, String>>,
 }
 impl Config {
-    pub fn id2label(&self) -> Option<&HashMap<String, String>> {
-        self.id2label.as_ref()
-    }
+    // pub fn id2label(&self) -> Option<&HashMap<String, String>> {
+    //     self.id2label.as_ref()
+    // }
 
-    pub fn num_labels(&self) -> usize {
-        if let Some(id2label) = &self.id2label {
-            id2label.len()
-        } else {
-            2
-        }
-    }
+    // pub fn num_labels(&self) -> usize {
+    //     if let Some(id2label) = &self.id2label {
+    //         id2label.len()
+    //     } else {
+    //         2
+    //     }
+    // }
 }
 
 fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
