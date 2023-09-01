@@ -1,4 +1,4 @@
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{DType, Device, Result, Tensor};
 use candle_nn::{ops::softmax, Embedding, Module, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -104,6 +104,36 @@ impl LayerNorm {
 enum PositionEmbeddingType {
     #[default]
     Absolute,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PoolConfig {
+    pooling_mode_cls_token: bool,
+    pooling_mode_mean_tokens: bool,
+    pooling_mode_max_tokens: bool,
+    pooling_mode_mean_sqrt_len_tokens: bool,
+}
+
+impl PoolConfig {
+    pub fn into(self) -> Pool {
+        if self.pooling_mode_cls_token {
+            Pool::Cls
+        } else if self.pooling_mode_mean_tokens {
+            Pool::Mean
+        } else if self.pooling_mode_max_tokens {
+            Pool::Max
+        } else {
+            Pool::MeanSqrt
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Pool {
+    Cls,
+    Mean,
+    Max,
+    MeanSqrt,
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/configuration_bert.py#L1
@@ -510,8 +540,7 @@ impl BertClassifier {
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let first = hidden_states.i((.., 0))?;
-        let hidden_states = self.pooler.forward(&first)?;
+        let hidden_states = self.pooler.forward(&hidden_states)?;
         // let hidden_states = hidden_states.tanh()?;
         let two = Tensor::new(&[2.0f32], hidden_states.device())?;
         let one = Tensor::new(&[1.0f32], hidden_states.device())?;
@@ -569,8 +598,6 @@ impl BertModel {
         let sequence_output = self.encoder.forward(&embedding_output)?;
         let outputs = self.classifier.forward(&sequence_output)?;
         // TODO suppot more pooling
-        let embedding = outputs.i(0)?;
-        // let first = classes.softmax(D::Minus1)?;
-        Ok(embedding)
+        Ok(outputs)
     }
 }

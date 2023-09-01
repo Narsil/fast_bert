@@ -8,17 +8,17 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use candle::{DType, Device, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::api::tokio::ApiBuilder;
-use hf_hub::api::tokio::{ApiError, ApiRepo};
+use hf_hub::{
+    api::tokio::{ApiBuilder, ApiError, ApiRepo},
+    Repo, RepoType,
+};
 use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::{global, sdk::propagation::TraceContextPropagator, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
-use safetensors::serialize;
-use safetensors::tensor::SafeTensorError;
-use safetensors::tensor::{SafeTensors, TensorView};
+use safetensors::tensor::{SafeTensorError, SafeTensors, TensorView};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -36,9 +36,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 mod model;
-use model::{BertModel, Config};
+use model::{BertModel, Config, Pool, PoolConfig};
 
-type OutMsg = Vec<u8>;
+type OutMsg = Vec<f32>;
 
 struct InMsg {
     payload: String,
@@ -70,6 +70,8 @@ pub enum BertError {
     RequestError(#[from] ApiError),
     #[error("JSON parsing error")]
     JSONError(#[from] serde_json::Error),
+    #[error("Cande Error: {0}")]
+    CandleError(#[from] candle::Error),
 }
 
 #[tokio::main]
@@ -77,39 +79,89 @@ async fn main() -> Result<(), BertError> {
     start().await
 }
 
+fn run(
+    payload: String,
+    tx: tokio::sync::oneshot::Sender<OutMsg>,
+    tokenizer: &Tokenizer,
+    model: &BertModel,
+    pool: Pool,
+) -> Result<(), BertError> {
+    tracing::debug!("Received {payload:?}");
+    let payload: Inputs = serde_json::from_str(&payload)?;
+    let mut batch = vec![payload.inputs.source_sentence];
+    batch.extend(payload.inputs.sentences);
+    let batch_size = batch.len();
+    let encoded = tokenizer.encode_batch(batch, true).unwrap();
+    let device = Device::Cpu;
+    let input_ids = encoded
+        .iter()
+        .map(|e| e.get_ids())
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let n = input_ids.len();
+    let input_ids = Tensor::new(input_ids.as_slice(), &device)
+        .unwrap()
+        .reshape((batch_size, n / batch_size))
+        .unwrap();
+
+    let type_ids = encoded
+        .iter()
+        .map(|e| e.get_type_ids())
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let type_ids = Tensor::new(type_ids.as_slice(), &device)
+        .unwrap()
+        .reshape((batch_size, n / batch_size))
+        .unwrap();
+    let embeddings = model.forward(&input_ids, &type_ids).unwrap();
+    let embeddings = match pool {
+        Pool::Cls => embeddings.i((.., 0))?,
+        Pool::Mean => {
+            let n = embeddings.dims()[1];
+            (embeddings.sum(1)? / (n as f64))?
+        }
+        _ => todo!(),
+    };
+    let source = embeddings.i(0..1)?;
+    let queries = embeddings.i(1..)?;
+
+    let norm_source = &source
+        .matmul(&source.t()?)?
+        .sum_all()?
+        .sqrt()?
+        .unsqueeze(0)?
+        .unsqueeze(0)?;
+    let norm_queries = &queries
+        .matmul(&queries.t()?)?
+        .sum(1)?
+        .sqrt()?
+        .unsqueeze(0)?;
+
+    let similarities = source
+        .matmul(&queries.t()?)?
+        .broadcast_div(norm_queries)?
+        .broadcast_div(norm_source)?;
+    let similarities = similarities.i(0)?.to_vec1::<f32>()?;
+
+    if let Err(_err) = tx.send(similarities) {
+        tracing::warn!("The receiver dropped");
+    }
+    Ok(())
+}
+
 fn server_loop(
     tokenizer: Tokenizer,
     model: BertModel,
+    pool: Pool,
     rx: Receiver<InMsg>,
 ) -> Result<(), BertError> {
     tracing::info!("Starting server loop");
     loop {
         if let Ok(InMsg { payload, tx }) = rx.recv() {
-            tracing::debug!("Recived {payload:?}");
-            let payload: Inputs = if let Ok(payload) = serde_json::from_str(&payload) {
-                payload
-            } else {
-                Inputs {
-                    inputs: payload,
-                    ..Default::default()
-                }
-            };
-            let encoded = tokenizer.encode(payload.inputs, false).unwrap();
-            let encoded = tokenizer.post_process(encoded, None, true).unwrap();
-
-            let device = Device::Cpu;
-            let input_ids = Tensor::new(encoded.get_ids(), &device)
-                .unwrap()
-                .unsqueeze(0)
-                .unwrap();
-            let type_ids = Tensor::new(encoded.get_type_ids(), &device)
-                .unwrap()
-                .unsqueeze(0)
-                .unwrap();
-            let embedding = model.forward(&input_ids, &type_ids).unwrap();
-            let safetensor_repr = serialize(HashMap::from([("embedding", embedding)]), &None)?;
-            if let Err(_err) = tx.send(safetensor_repr) {
-                println!("The receiver dropped");
+            if let Err(err) = run(payload, tx, &tokenizer, &model, pool) {
+                tracing::error!("{}", err);
             }
         }
     }
@@ -176,41 +228,46 @@ fn init_logging() {
 }
 
 #[instrument(skip_all)]
-async fn download(api: ApiRepo) -> Result<(Config, Tokenizer, PathBuf), BertError> {
+async fn download(api: ApiRepo) -> Result<(Pool, Config, Tokenizer, PathBuf), BertError> {
     let start = std::time::Instant::now();
     let tokenizer = Tokenizer::from_file(api.get("tokenizer.json").await?).unwrap();
     let config = api.get("config.json").await?;
     let config: String = std::fs::read_to_string(config).expect("Could not read config");
     let config: Config = serde_json::from_str(&config)?;
+    let pool_config = api.get("1_Pooling/config.json").await?;
+    let pool_config = std::fs::read_to_string(pool_config).expect("Could not read config");
+    let pool_config: PoolConfig = serde_json::from_str(&pool_config)?;
+    let pool: Pool = pool_config.into();
     let model = api.get("model.safetensors").await?;
     tracing::info!("Download took {:?}", start.elapsed());
-    Ok((config, tokenizer, model))
+    Ok((pool, config, tokenizer, model))
 }
 
-
-fn reinterpret_or_copy(v: &[u8]) -> Vec<f32>{
-        let num_bytes = std::mem::size_of::<f32>();
-        if (v.as_ptr() as usize) % num_bytes == 0 {
-            // SAFETY This is safe because we just checked that this
-            // was correctly aligned.
-            let size = v.len() / num_bytes;
-                unsafe { Vec::from_raw_parts(v.as_ptr() as *mut f32, size, size) }
-        } else {
-            let mut c = Vec::with_capacity(v.len() / num_bytes);
-            let mut i = 0;
-            while i < v.len() {
-                c.push(f32::from_le_bytes([v[i], v[i + 1], v[i+2] , v[i + 3]]));
-                i += num_bytes;
-            }
-            c
-        }
+fn reinterpret_or_copy(v: &[u8]) -> Vec<f32> {
+    let num_bytes = std::mem::size_of::<f32>();
+    // if (v.as_ptr() as usize) % num_bytes == 0 {
+    //     // SAFETY This is safe because we just checked that this
+    //     // was correctly aligned.
+    //     let size = v.len() / num_bytes;
+    //     unsafe { Vec::from_raw_parts(v.as_ptr() as *mut f32, size, size) }
+    // } else {
+    let mut c = Vec::with_capacity(v.len() / num_bytes);
+    let mut i = 0;
+    while i < v.len() {
+        c.push(f32::from_le_bytes([v[i], v[i + 1], v[i + 2], v[i + 3]]));
+        i += num_bytes;
+    }
+    c
+    // }
 }
 
-fn load_tensor(view: TensorView) -> Tensor{
+fn load_tensor(view: TensorView) -> Tensor {
     let data = view.data();
-    let data = match view.dtype(){
+    let data = match view.dtype() {
         safetensors::Dtype::F32 => reinterpret_or_copy(data),
-        _ => {return Tensor::zeros((1, 2), DType::F32, &Device::Cpu).unwrap();}
+        _ => {
+            return Tensor::zeros((1, 2), DType::F32, &Device::Cpu).unwrap();
+        }
     };
     Tensor::from_vec(data, view.shape(), &Device::Cpu).unwrap()
 }
@@ -219,10 +276,14 @@ fn load_tensor(view: TensorView) -> Tensor{
 async fn load(path: PathBuf, config: &Config) -> Result<BertModel, BertError> {
     let start = std::time::Instant::now();
     let file = std::fs::File::open(path)?;
-    let mmap = unsafe { memmap2::Mmap::map(&file)?  };
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
     let mmap: &'static [u8] = Box::leak(Box::new(mmap));
     let tensors: SafeTensors<'_> = SafeTensors::deserialize(&mmap)?;
-    let tensors : HashMap<String, Tensor> = tensors.tensors().into_iter().map(|(name, view)| (name, load_tensor(view))).collect();
+    let tensors: HashMap<String, Tensor> = tensors
+        .tensors()
+        .into_iter()
+        .map(|(name, view)| (name, load_tensor(view)))
+        .collect();
     let device = Device::Cpu;
     let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
     let bert = BertModel::load(vb, &config).unwrap();
@@ -231,20 +292,21 @@ async fn load(path: PathBuf, config: &Config) -> Result<BertModel, BertError> {
 }
 
 #[instrument(skip_all)]
-async fn init() -> Result<(Tokenizer, BertModel), BertError> {
+async fn init() -> Result<(Tokenizer, BertModel, Pool), BertError> {
     let model_id: String = std::env::var("MODEL_ID").expect("MODEL_ID is not defined");
+    let revision: String = std::env::var("REVISION").unwrap_or("main".to_string());
     let token: Option<String> = std::env::var("HF_API_TOKEN").ok();
     let mut builder = ApiBuilder::new().with_progress(false).with_token(token);
     if let Ok(cache_dir) = std::env::var("TRANSFORMERS_CACHE") {
         builder = builder.with_cache_dir(cache_dir.into());
     }
     let api = builder.build().unwrap();
-    let api = api.model(model_id);
+    let api = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
 
-    let (config, tokenizer, model) = download(api).await?;
+    let (pool, config, tokenizer, model) = download(api).await?;
 
     let model = load(model, &config).await?;
-    Ok((tokenizer, model))
+    Ok((tokenizer, model, pool))
 }
 
 /// The default way [`Span`]s will be created for [`Trace`].
@@ -372,14 +434,14 @@ async fn start() -> Result<(), BertError> {
     let span = info_span!("init");
     span.set_parent(context);
 
-    let (tokenizer, model) = init().instrument(span).await?;
+    let (tokenizer, model, pool) = init().instrument(span).await?;
 
     let queue_size = 2;
 
     let (tx, rx) = std::sync::mpsc::sync_channel(queue_size);
 
     tokio::task::spawn_blocking(move || {
-        server_loop(tokenizer, model, rx).unwrap();
+        server_loop(tokenizer, model, pool, rx).unwrap();
     });
 
     let state = AppState {
@@ -426,11 +488,16 @@ async fn start() -> Result<(), BertError> {
 // struct Parameters {
 //     top_k: Option<usize>,
 // }
+#[derive(Deserialize, Default)]
+struct Similarity {
+    sentences: Vec<String>,
+    source_sentence: String,
+}
 
 // the input to our `create_user` handler
 #[derive(Deserialize, Default)]
 struct Inputs {
-    inputs: String,
+    inputs: Similarity,
     // #[serde(default)]
     // parameters: Parameters,
 }
@@ -473,5 +540,5 @@ async fn inference(State(state): State<AppState>, payload: String) -> impl IntoR
         ACCESS_CONTROL_EXPOSE_HEADERS,
         format!("{header_time}, {header_type}").parse().unwrap(),
     );
-    (headers, receive).into_response()
+    (headers, Json(receive)).into_response()
 }
