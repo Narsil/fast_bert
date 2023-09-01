@@ -18,7 +18,7 @@ use opentelemetry::{global, sdk::propagation::TraceContextPropagator, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use safetensors::serialize;
 use safetensors::tensor::SafeTensorError;
-use safetensors::tensor::SafeTensors;
+use safetensors::tensor::{SafeTensors, TensorView};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -177,21 +177,57 @@ fn init_logging() {
 
 #[instrument(skip_all)]
 async fn download(api: ApiRepo) -> Result<(Config, Tokenizer, PathBuf), BertError> {
+    let start = std::time::Instant::now();
     let tokenizer = Tokenizer::from_file(api.get("tokenizer.json").await?).unwrap();
     let config = api.get("config.json").await?;
     let config: String = std::fs::read_to_string(config).expect("Could not read config");
     let config: Config = serde_json::from_str(&config)?;
     let model = api.get("model.safetensors").await?;
+    tracing::info!("Download took {:?}", start.elapsed());
     Ok((config, tokenizer, model))
+}
+
+
+fn reinterpret_or_copy(v: &[u8]) -> Vec<f32>{
+        let num_bytes = std::mem::size_of::<f32>();
+        if (v.as_ptr() as usize) % num_bytes == 0 {
+            // SAFETY This is safe because we just checked that this
+            // was correctly aligned.
+            let size = v.len() / num_bytes;
+                unsafe { Vec::from_raw_parts(v.as_ptr() as *mut f32, size, size) }
+        } else {
+            let mut c = Vec::with_capacity(v.len() / num_bytes);
+            let mut i = 0;
+            while i < v.len() {
+                c.push(f32::from_le_bytes([v[i], v[i + 1], v[i+2] , v[i + 3]]));
+                i += num_bytes;
+            }
+            c
+        }
+}
+
+fn load_tensor(view: TensorView) -> Tensor{
+    let data = view.data();
+    let data = match view.dtype(){
+        safetensors::Dtype::F32 => reinterpret_or_copy(data),
+        _ => {return Tensor::zeros((1, 2), DType::F32, &Device::Cpu).unwrap();}
+    };
+    Tensor::from_vec(data, view.shape(), &Device::Cpu).unwrap()
 }
 
 #[instrument(skip_all)]
 async fn load(path: PathBuf, config: &Config) -> Result<BertModel, BertError> {
-    let buffer = tokio::fs::read(path).await?;
-    let tensors: SafeTensors<'_> = SafeTensors::deserialize(&buffer)?;
+    let start = std::time::Instant::now();
+    let file = std::fs::File::open(path)?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)?  };
+    let mmap: &'static [u8] = Box::leak(Box::new(mmap));
+    let tensors: SafeTensors<'_> = SafeTensors::deserialize(&mmap)?;
+    let tensors : HashMap<String, Tensor> = tensors.tensors().into_iter().map(|(name, view)| (name, load_tensor(view))).collect();
     let device = Device::Cpu;
-    let vb = VarBuilder::from_safetensors(vec![tensors], DType::F32, &device);
-    Ok(BertModel::load(vb, &config).unwrap())
+    let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+    let bert = BertModel::load(vb, &config).unwrap();
+    tracing::info!("Load took {:?}", start.elapsed());
+    Ok(bert)
 }
 
 #[instrument(skip_all)]

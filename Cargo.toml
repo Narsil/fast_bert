@@ -33,6 +33,7 @@ axum-tracing-opentelemetry = "0.13.1"
 http = "0.2.9"
 hyper = "0.14.27"
 init-tracing-opentelemetry = { version = "0.13.1" }
+memmap2 = "0.7.1"
 
 [profile.release-fat]
 inherits = "release"
