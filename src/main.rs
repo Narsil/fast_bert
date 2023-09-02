@@ -79,6 +79,10 @@ async fn main() -> Result<(), BertError> {
     start().await
 }
 
+pub fn normalize_l2(v: &Tensor) -> Result<Tensor, BertError> {
+    Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
+}
+
 fn run(
     payload: String,
     tx: tokio::sync::oneshot::Sender<OutMsg>,
@@ -90,54 +94,50 @@ fn run(
     let payload: Inputs = serde_json::from_str(&payload)?;
     let mut batch = vec![payload.inputs.source_sentence];
     batch.extend(payload.inputs.sentences);
-    let batch_size = batch.len();
-    let encoded = tokenizer.encode_batch(batch, true).unwrap();
-    let device = Device::Cpu;
-    let input_ids = encoded
-        .iter()
-        .map(|e| e.get_ids())
-        .flatten()
-        .cloned()
-        .collect::<Vec<_>>();
-    let n = input_ids.len();
-    let input_ids = Tensor::new(input_ids.as_slice(), &device)
-        .unwrap()
-        .reshape((batch_size, n / batch_size))
-        .unwrap();
 
-    let type_ids = encoded
-        .iter()
-        .map(|e| e.get_type_ids())
-        .flatten()
-        .cloned()
-        .collect::<Vec<_>>();
-    let type_ids = Tensor::new(type_ids.as_slice(), &device)
-        .unwrap()
-        .reshape((batch_size, n / batch_size))
-        .unwrap();
-    let embeddings = model.forward(&input_ids, &type_ids).unwrap();
-    let embeddings = match pool {
-        Pool::Cls => embeddings.i((.., 0))?,
-        Pool::Mean => {
-            let n = embeddings.dims()[1];
-            (embeddings.sum(1)? / (n as f64))?
-        }
-        _ => todo!(),
-    };
+    let device = Device::Cpu;
+    let embeddings: Result<Vec<Tensor>, BertError> = batch
+        .into_iter()
+        .map(|s| -> Result<Tensor, BertError> {
+            let encoded = tokenizer.encode(s, true).unwrap();
+
+            let input_ids = Tensor::new(encoded.get_ids(), &device)
+                .unwrap()
+                .unsqueeze(0)
+                .unwrap();
+
+            let type_ids = Tensor::new(encoded.get_type_ids(), &device)
+                .unwrap()
+                .unsqueeze(0)
+                .unwrap();
+            let embeddings = model.forward(&input_ids, &type_ids)?;
+            let embeddings = match pool {
+                Pool::Cls => embeddings.i((.., 0))?,
+                Pool::Mean => {
+                    let n = embeddings.dims()[1];
+                    (embeddings.sum(1)? / (n as f64))?
+                }
+                _ => todo!(),
+            };
+            // tracing::info!("After mean: {embeddings}");
+            // Normalize
+            let embeddings = normalize_l2(&embeddings)?;
+            // tracing::info!("After normalize: {embeddings}");
+            // Remove batch
+            let embeddings = embeddings.i(0)?;
+
+            Ok(embeddings)
+        })
+        .collect();
+    let embeddings = embeddings?;
+    let embeddings = Tensor::stack(&embeddings, 0)?;
     let source = embeddings.i(0..1)?;
     let queries = embeddings.i(1..)?;
 
-    let norm_source = &source
-        .matmul(&source.t()?)?
-        .sum_all()?
-        .sqrt()?
-        .unsqueeze(0)?
-        .unsqueeze(0)?;
-    let norm_queries = &queries
-        .matmul(&queries.t()?)?
-        .sum(1)?
-        .sqrt()?
-        .unsqueeze(0)?;
+    let norm_source = &source.sqr()?.sum(1)?.sqrt()?.unsqueeze(0)?;
+    let norm_queries = &queries.sqr()?.sum(1)?.sqrt()?.unsqueeze(0)?;
+
+    // tracing::info!("Norms {norm_source} - queries {norm_queries}");
 
     let similarities = source
         .matmul(&queries.t()?)?
@@ -230,7 +230,8 @@ fn init_logging() {
 #[instrument(skip_all)]
 async fn download(api: ApiRepo) -> Result<(Pool, Config, Tokenizer, PathBuf), BertError> {
     let start = std::time::Instant::now();
-    let tokenizer = Tokenizer::from_file(api.get("tokenizer.json").await?).unwrap();
+    let mut tokenizer = Tokenizer::from_file(api.get("tokenizer.json").await?).unwrap();
+    tokenizer.with_padding(None);
     let config = api.get("config.json").await?;
     let config: String = std::fs::read_to_string(config).expect("Could not read config");
     let config: Config = serde_json::from_str(&config)?;
@@ -245,20 +246,20 @@ async fn download(api: ApiRepo) -> Result<(Pool, Config, Tokenizer, PathBuf), Be
 
 fn reinterpret_or_copy(v: &[u8]) -> Vec<f32> {
     let num_bytes = std::mem::size_of::<f32>();
-    // if (v.as_ptr() as usize) % num_bytes == 0 {
-    //     // SAFETY This is safe because we just checked that this
-    //     // was correctly aligned.
-    //     let size = v.len() / num_bytes;
-    //     unsafe { Vec::from_raw_parts(v.as_ptr() as *mut f32, size, size) }
-    // } else {
-    let mut c = Vec::with_capacity(v.len() / num_bytes);
-    let mut i = 0;
-    while i < v.len() {
-        c.push(f32::from_le_bytes([v[i], v[i + 1], v[i + 2], v[i + 3]]));
-        i += num_bytes;
+    if (v.as_ptr() as usize) % num_bytes == 0 {
+        // SAFETY This is safe because we just checked that this
+        // was correctly aligned.
+        let size = v.len() / num_bytes;
+        unsafe { Vec::from_raw_parts(v.as_ptr() as *mut f32, size, size) }
+    } else {
+        let mut c = Vec::with_capacity(v.len() / num_bytes);
+        let mut i = 0;
+        while i < v.len() {
+            c.push(f32::from_le_bytes([v[i], v[i + 1], v[i + 2], v[i + 3]]));
+            i += num_bytes;
+        }
+        c
     }
-    c
-    // }
 }
 
 fn load_tensor(view: TensorView) -> Tensor {

@@ -1,4 +1,4 @@
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{ops::softmax, Embedding, Module, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -260,6 +260,7 @@ impl BertEmbeddings {
         let _enter = self.span.enter();
         let (_bsize, seq_len) = input_ids.shape().dims2()?;
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
+        // tracing::info!("word embeddings {}", input_embeddings);
         let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?;
         let mut embeddings = (&input_embeddings + token_type_embeddings)?;
         if let Some(position_embeddings) = &self.position_embeddings {
@@ -270,6 +271,8 @@ impl BertEmbeddings {
         }
         let embeddings = self.layer_norm.forward(&embeddings)?;
         let embeddings = self.dropout.forward(&embeddings)?;
+
+        // tracing::info!("final embeddings {}", embeddings);
         Ok(embeddings)
     }
 }
@@ -513,6 +516,7 @@ impl BertEncoder {
         for layer in self.layers.iter() {
             hidden_states = layer.forward(&hidden_states)?
         }
+        // tracing::info!("final encoding {}", hidden_states);
         Ok(hidden_states)
     }
 }
@@ -540,6 +544,8 @@ impl BertClassifier {
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
+        // Pool means take the hidden_states of the first token
+        let hidden_states = hidden_states.i((.., 0))?;
         let hidden_states = self.pooler.forward(&hidden_states)?;
         // let hidden_states = hidden_states.tanh()?;
         let two = Tensor::new(&[2.0f32], hidden_states.device())?;
@@ -595,9 +601,10 @@ impl BertModel {
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
-        let sequence_output = self.encoder.forward(&embedding_output)?;
-        let outputs = self.classifier.forward(&sequence_output)?;
-        // TODO suppot more pooling
+        let outputs = self.encoder.forward(&embedding_output)?;
+        // tracing::info!("token embeddings {outputs}");
+        // let outputs = self.classifier.forward(&outputs)?;
+        // tracing::info!("After classifier {outputs}");
         Ok(outputs)
     }
 }
