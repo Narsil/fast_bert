@@ -41,7 +41,7 @@ use model::{BertModel, Config, Pool, PoolConfig};
 type OutMsg = Vec<f32>;
 
 struct InMsg {
-    payload: String,
+    payload: Inputs,
     tx: tokio::sync::oneshot::Sender<OutMsg>,
 }
 
@@ -84,14 +84,13 @@ pub fn normalize_l2(v: &Tensor) -> Result<Tensor, BertError> {
 }
 
 fn run(
-    payload: String,
+    payload: Inputs,
     tx: tokio::sync::oneshot::Sender<OutMsg>,
     tokenizer: &Tokenizer,
     model: &BertModel,
     pool: Pool,
 ) -> Result<(), BertError> {
     tracing::debug!("Received {payload:?}");
-    let payload: Inputs = serde_json::from_str(&payload)?;
     let mut batch = vec![payload.inputs.source_sentence];
     batch.extend(payload.inputs.sentences);
 
@@ -489,14 +488,14 @@ async fn start() -> Result<(), BertError> {
 // struct Parameters {
 //     top_k: Option<usize>,
 // }
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 struct Similarity {
     sentences: Vec<String>,
     source_sentence: String,
 }
 
 // the input to our `create_user` handler
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 struct Inputs {
     inputs: Similarity,
     // #[serde(default)]
@@ -515,7 +514,10 @@ async fn health() -> impl IntoResponse {
 }
 
 #[instrument(skip_all)]
-async fn inference(State(state): State<AppState>, payload: String) -> impl IntoResponse {
+async fn inference(
+    State(state): State<AppState>,
+    Json(payload): Json<Inputs>,
+) -> impl IntoResponse {
     let start = std::time::Instant::now();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let msg = InMsg { payload, tx };
